@@ -90,6 +90,11 @@ class Bookmarks(object):
         """
         if key == '`':
             key = "'"
+        if key == '0':
+            for i in string.ascii_letters:
+                if i not in self.dct:
+                    key = i
+                    break
         if key in ALLOWED_KEYS:
             self.dct[key] = value
             if self.autosave: self.save()
