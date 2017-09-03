@@ -3,18 +3,18 @@
 
 """Shared objects contain singletons for shared use."""
 
-from ranger.ext.lazy_property import lazy_property
+from __future__ import (absolute_import, division, print_function)
 
 
-class FileManagerAware(object):
+class FileManagerAware(object):  # pylint: disable=too-few-public-methods
     """Subclass this to gain access to the global "FM" object."""
     @staticmethod
-    def _setup(fm):
+    def fm_set(fm):
         FileManagerAware.fm = fm
 
 
-class SettingsAware(object):
+class SettingsAware(object):  # pylint: disable=too-few-public-methods
     """Subclass this to gain access to the global "SettingObject" object."""
     @staticmethod
-    def _setup(settings):
+    def settings_set(settings):
         SettingsAware.settings = settings

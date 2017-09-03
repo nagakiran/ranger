@@ -3,24 +3,24 @@
 
 """The BrowserColumn widget displays the contents of a directory or file."""
 
+from __future__ import (absolute_import, division, print_function)
+
 import curses
 import stat
 from time import time
 from os.path import splitext
 
-from . import Widget
-from .pager import Pager
 from ranger.ext.widestring import WideString
-
 from ranger.core import linemode
 
-from ranger.gui.color import *
+from . import Widget
+from .pager import Pager
 
 
-class BrowserColumn(Pager):
+class BrowserColumn(Pager):  # pylint: disable=too-many-instance-attributes
     main_column = False
     display_infostring = False
-    display_vcsstate   = True
+    display_vcsstate = True
     scroll_begin = 0
     target = None
     last_redraw_time = -1
@@ -39,13 +39,13 @@ class BrowserColumn(Pager):
         level <0 => parent directories
         """
         Pager.__init__(self, win)
-        Widget.__init__(self, win)
+        Widget.__init__(self, win)  # pylint: disable=non-parent-init-called
         self.level = level
         self.tab = tab
         self.original_level = level
 
         self.settings.signal_bind('setopt.display_size_in_main_column',
-                self.request_redraw, weak=True)
+                                  self.request_redraw, weak=True)
 
     def request_redraw(self):
         self.need_redraw = True
@@ -77,13 +77,14 @@ class BrowserColumn(Pager):
                 elif event.pressed(3):
                     try:
                         clicked_file = self.target.files[index]
+                    except IndexError:
+                        pass
+                    else:
                         if clicked_file.is_directory:
-                            self.fm.enter_dir(clicked_file.path)
+                            self.fm.enter_dir(clicked_file.path, remember=True)
                         elif self.level == 0:
                             self.fm.thisdir.move_to_obj(clicked_file)
                             self.fm.execute_file(clicked_file)
-                    except Exception:
-                        pass
 
         else:
             if self.level > 0 and not direction:
@@ -103,7 +104,7 @@ class BrowserColumn(Pager):
         """
         try:
             self.win.move(line, 0)
-        except Exception:
+        except curses.error:
             return
         for entry in commands:
             text, attr = entry
@@ -139,32 +140,37 @@ class BrowserColumn(Pager):
 
     def draw(self):
         """Call either _draw_file() or _draw_directory()"""
-        if self.target != self.old_dir:
+        target = self.target
+
+        if target != self.old_dir:
             self.need_redraw = True
-            self.old_dir = self.target
+            self.old_dir = target
 
-        if self.target:     # don't garbage collect this directory please
-            self.target.use()
+        if target:
+            target.use()
 
-        if self.target and self.target.is_directory \
-                and (self.level <= 0 or self.settings.preview_directories):
-            if self.target.pointed_obj != self.old_thisfile:
-                self.need_redraw = True
-                self.old_thisfile = self.target.pointed_obj
-
-            if self.target.load_content_if_outdated() \
-                    or self.target.sort_if_outdated() \
-                    or self.last_redraw_time < self.target.last_update_time:
-                self.need_redraw = True
+            if target.is_directory and (self.level <= 0 or self.settings.preview_directories):
+                if self.old_thisfile != target.pointed_obj:
+                    self.old_thisfile = target.pointed_obj
+                    self.need_redraw = True
+                self.need_redraw |= target.load_content_if_outdated()
+                self.need_redraw |= target.sort_if_outdated()
+                self.need_redraw |= self.last_redraw_time < target.last_update_time
+                if target.pointed_obj:
+                    self.need_redraw |= target.pointed_obj.load_if_outdated()
+                    self.need_redraw |= self.last_redraw_time < target.pointed_obj.last_load_time
+            else:
+                self.need_redraw |= target.load_if_outdated()
+                self.need_redraw |= self.last_redraw_time < target.last_load_time
 
         if self.need_redraw:
             self.win.erase()
-            if self.target is None:
+            if target is None:
                 pass
-            elif self.target.is_file:
+            elif target.is_file:
                 Pager.open(self)
                 self._draw_file()
-            elif self.target.is_directory:
+            elif target.is_directory:
                 self._draw_directory()
                 Widget.draw(self)
             self.need_redraw = False
@@ -182,14 +188,14 @@ class BrowserColumn(Pager):
             Pager.close(self)
             return
 
-        f = self.target.get_preview_source(self.wid, self.hei)
-        if f is None:
+        path = self.target.get_preview_source(self.wid, self.hei)
+        if path is None:
             Pager.close(self)
         else:
             if self.target.is_image_preview():
-                self.set_image(f)
+                self.set_image(path)
             else:
-                self.set_source(f)
+                self.set_source(path)
             Pager.draw(self)
 
     def _format_line_number(self, linum_format, i, selected_i):
@@ -201,7 +207,8 @@ class BrowserColumn(Pager):
 
         return linum_format.format(line_number)
 
-    def _draw_directory(self):
+    def _draw_directory(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+            self):
         """Draw the contents of a directory"""
         if self.image:
             self.image = None
@@ -273,7 +280,7 @@ class BrowserColumn(Pager):
 
             # Extract linemode-related information from the drawn object
             metadata = None
-            current_linemode = drawn.linemode_dict[drawn._linemode]
+            current_linemode = drawn.linemode_dict[drawn.linemode]
             if current_linemode.uses_metadata:
                 metadata = self.fm.metadata.get_metadata(drawn.path)
                 if not all(getattr(metadata, tag)
@@ -303,7 +310,7 @@ class BrowserColumn(Pager):
             text = current_linemode.filetitle(drawn, metadata)
 
             if drawn.marked and (self.main_column or
-                    self.settings.display_tags_in_all_columns):
+                                 self.settings.display_tags_in_all_columns):
                 text = " " + text
 
             # Computing predisplay data. predisplay contains a list of lists
@@ -362,17 +369,16 @@ class BrowserColumn(Pager):
             predisplay_left += textstring
             space -= textstringlen
 
+            assert space >= 0, "Error: there is not enough space to write the text. " \
+                "I have computed spaces wrong."
             if space > 0:
                 predisplay_left.append([' ' * space, []])
-            elif space < 0:
-                raise Exception("Error: there is not enough space to write "
-                        "the text. I have computed spaces wrong.")
 
             # Computing display data. Now we compute the display_data list
             # ready to display in curses. It is a list of lists [string, attr]
 
             this_color = base_color + list(drawn.mimetype_tuple) + \
-                    self._draw_directory_color(i, drawn, copied)
+                self._draw_directory_color(i, drawn, copied)
             display_data = []
             drawn.display_data[key] = display_data
 
@@ -385,13 +391,13 @@ class BrowserColumn(Pager):
             self.color_reset()
 
     def _get_index_of_selected_file(self):
-        if self.fm.ui.viewmode == 'multipane' and hasattr(self, 'tab'):
+        if self.fm.ui.viewmode == 'multipane' and self.tab:
             return self.tab.pointer
-        else:
-            return self.target.pointer
+        return self.target.pointer
 
-    def _total_len(self, predisplay):
-        return sum([len(WideString(s)) for s, L in predisplay])
+    @staticmethod
+    def _total_len(predisplay):
+        return sum([len(WideString(s)) for s, _ in predisplay])
 
     def _draw_text_display(self, text, space):
         wtext = WideString(text)
@@ -479,7 +485,7 @@ class BrowserColumn(Pager):
 
         return this_color
 
-    def _get_scroll_begin(self):
+    def _get_scroll_begin(self):  # pylint: disable=too-many-return-statements
         """Determines scroll_begin (the position of the first displayed file)"""
         offset = self.settings.scroll_offset
         dirsize = len(self.target)
@@ -509,12 +515,10 @@ class BrowserColumn(Pager):
             return original
 
         if projected > upper_limit:
-            return min(dirsize - winsize,
-                    original + (projected - upper_limit))
+            return min(dirsize - winsize, original + (projected - upper_limit))
 
         if projected < upper_limit:
-            return max(0,
-                    original - (lower_limit - projected))
+            return max(0, original - (lower_limit - projected))
 
         return original
 

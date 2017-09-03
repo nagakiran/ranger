@@ -1,14 +1,12 @@
-# This file was taken from the python standard library and has been
+# This file was taken from the python 2.7.13 standard library and has been
 # slightly modified to do a "yield" after every 16KB of copying
-"""Utility functions for copying files and directory trees.
 
-XXX The functions here don't copy the resource fork or other metadata on Mac.
-"""
+from __future__ import (absolute_import, division, print_function)
 
 import os
-import sys
 import stat
-from os.path import abspath
+import sys
+from shutil import (_samefile, rmtree, _basename, _destinsrc, Error, SpecialFileError)
 
 __all__ = ["copyfileobj", "copyfile", "copystat", "copy2", "BLOCK_SIZE",
            "copytree", "move", "rmtree", "Error", "SpecialFileError"]
@@ -17,18 +15,108 @@ APPENDIX = '_'
 BLOCK_SIZE = 16 * 1024
 
 
-class Error(EnvironmentError):
-    pass
-
-
-class SpecialFileError(EnvironmentError):
-    """Raised when trying to do a kind of operation (e.g. copying) which is
-    not supported on a special file (e.g. a named pipe)"""
-
 try:
     WindowsError
 except NameError:
-    WindowsError = None
+    WindowsError = None  # pylint: disable=invalid-name
+
+
+if sys.version_info < (3, 3):
+    def copystat(src, dst):
+        """Copy all stat info (mode bits, atime, mtime, flags) from src to dst"""
+        st = os.stat(src)  # pylint: disable=invalid-name
+        mode = stat.S_IMODE(st.st_mode)
+        if hasattr(os, 'utime'):
+            try:
+                os.utime(dst, (st.st_atime, st.st_mtime))
+            except OSError:
+                pass
+        if hasattr(os, 'chmod'):
+            try:
+                os.chmod(dst, mode)
+            except OSError:
+                pass
+        if hasattr(os, 'chflags') and hasattr(st, 'st_flags'):
+            try:
+                os.chflags(dst, st.st_flags)  # pylint: disable=no-member
+            except OSError:
+                pass
+else:
+    from shutil import _copyxattr  # pylint: disable=no-name-in-module
+
+    def copystat(src, dst, follow_symlinks=True):
+        """Copy all stat info (mode bits, atime, mtime, flags) from src to dst.
+
+        If the optional flag `follow_symlinks` is not set, symlinks aren't followed if and
+        only if both `src` and `dst` are symlinks.
+
+        """
+        def _nop(*args, **kwargs):  # pylint: disable=unused-argument
+            pass
+
+        # follow symlinks (aka don't not follow symlinks)
+        follow = follow_symlinks or not (os.path.islink(src) and os.path.islink(dst))
+        if follow:
+            # use the real function if it exists
+            def lookup(name):
+                return getattr(os, name, _nop)
+        else:
+            # use the real function only if it exists
+            # *and* it supports follow_symlinks
+            def lookup(name):
+                fn = getattr(os, name, _nop)  # pylint: disable=invalid-name
+                if fn in os.supports_follow_symlinks:  # pylint: disable=no-member
+                    return fn
+                return _nop
+
+        st = lookup("stat")(src, follow_symlinks=follow)  # pylint: disable=invalid-name
+        mode = stat.S_IMODE(st.st_mode)
+        try:
+            lookup("utime")(dst, ns=(st.st_atime_ns, st.st_mtime_ns),
+                            follow_symlinks=follow)
+        except OSError:
+            pass
+        try:
+            lookup("chmod")(dst, mode, follow_symlinks=follow)
+        except NotImplementedError:
+            # if we got a NotImplementedError, it's because
+            #   * follow_symlinks=False,
+            #   * lchown() is unavailable, and
+            #   * either
+            #       * fchownat() is unavailable or
+            #       * fchownat() doesn't implement AT_SYMLINK_NOFOLLOW.
+            #         (it returned ENOSUP.)
+            # therefore we're out of options--we simply cannot chown the
+            # symlink.  give up, suppress the error.
+            # (which is what shutil always did in this circumstance.)
+            pass
+        except OSError:
+            pass
+        if hasattr(st, 'st_flags'):
+            try:
+                lookup("chflags")(dst, st.st_flags, follow_symlinks=follow)
+            except OSError:
+                pass
+        try:
+            _copyxattr(src, dst, follow_symlinks=follow)
+        except OSError:
+            pass
+
+
+def get_safe_path(dst):
+    if not os.path.exists(dst):
+        return dst
+    if not dst.endswith(APPENDIX):
+        dst += APPENDIX
+        if not os.path.exists(dst):
+            return dst
+    n = 0
+    test_dst = dst + str(n)
+    while os.path.exists(test_dst):
+        n += 1
+        test_dst = dst + str(n)
+
+    return test_dst
 
 
 def copyfileobj(fsrc, fdst, length=BLOCK_SIZE):
@@ -43,29 +131,14 @@ def copyfileobj(fsrc, fdst, length=BLOCK_SIZE):
         yield done
 
 
-def _samefile(src, dst):
-    # Macintosh, Unix.
-    if hasattr(os.path, 'samefile'):
-        try:
-            return os.path.samefile(src, dst)
-        except OSError:
-            return False
-
-    # All other platforms: check for same pathname.
-    return (os.path.normcase(abspath(src)) ==
-            os.path.normcase(abspath(dst)))
-
-
 def copyfile(src, dst):
     """Copy data from src to dst"""
     if _samefile(src, dst):
         raise Error("`%s` and `%s` are the same file" % (src, dst))
 
-    fsrc = None
-    fdst = None
-    for fn in [src, dst]:
+    for fn in [src, dst]:  # pylint: disable=invalid-name
         try:
-            st = os.stat(fn)
+            st = os.stat(fn)  # pylint: disable=invalid-name
         except OSError:
             # File most likely does not exist
             pass
@@ -73,37 +146,11 @@ def copyfile(src, dst):
             # XXX What about other special files? (sockets, devices...)
             if stat.S_ISFIFO(st.st_mode):
                 raise SpecialFileError("`%s` is a named pipe" % fn)
-    try:
-        fsrc = open(src, 'rb')
-        fdst = open(dst, 'wb')
-        for done in copyfileobj(fsrc, fdst):
-            yield done
-    finally:
-        if fdst:
-            fdst.close()
-        if fsrc:
-            fsrc.close()
 
-
-def copystat(src, dst):
-    """Copy all stat info (mode bits, atime, mtime, flags) from src to dst"""
-    st = os.lstat(src)
-    mode = stat.S_IMODE(st.st_mode)
-    if hasattr(os, 'utime'):
-        try:
-            os.utime(dst, (st.st_atime, st.st_mtime))
-        except Exception:
-            pass
-    if hasattr(os, 'chmod'):
-        try:
-            os.chmod(dst, mode)
-        except Exception:
-            pass
-    if hasattr(os, 'chflags') and hasattr(st, 'st_flags'):
-        try:
-            os.chflags(dst, st.st_flags)
-        except Exception:
-            pass
+    with open(src, 'rb') as fsrc:
+        with open(dst, 'wb') as fdst:
+            for done in copyfileobj(fsrc, fdst):
+                yield done
 
 
 def copy2(src, dst, overwrite=False, symlinks=False):
@@ -127,23 +174,8 @@ def copy2(src, dst, overwrite=False, symlinks=False):
         copystat(src, dst)
 
 
-def get_safe_path(dst):
-    if not os.path.exists(dst):
-        return dst
-    if not dst.endswith(APPENDIX):
-        dst += APPENDIX
-        if not os.path.exists(dst):
-            return dst
-    n = 0
-    test_dst = dst + str(n)
-    while os.path.exists(test_dst):
-        n += 1
-        test_dst = dst + str(n)
-
-    return test_dst
-
-
-def copytree(src, dst, symlinks=False, ignore=None, overwrite=False):
+def copytree(src, dst,  # pylint: disable=too-many-locals,too-many-branches
+             symlinks=False, ignore=None, overwrite=False):
     """Recursively copy a directory tree using copy2().
 
     The destination directory must not already exist.
@@ -175,13 +207,13 @@ def copytree(src, dst, symlinks=False, ignore=None, overwrite=False):
     else:
         ignored_names = set()
 
-    errors = []
     try:
         os.makedirs(dst)
-    except Exception as err:
+    except OSError:
         if not overwrite:
             dst = get_safe_path(dst)
             os.makedirs(dst)
+    errors = []
     done = 0
     for name in names:
         if name in ignored_names:
@@ -196,18 +228,16 @@ def copytree(src, dst, symlinks=False, ignore=None, overwrite=False):
                 os.symlink(linkto, dstname)
                 copystat(srcname, dstname)
             elif os.path.isdir(srcname):
-                d = 0
-                for d in copytree(srcname, dstname, symlinks,
-                        ignore, overwrite):
-                    yield done + d
-                done += d
+                n = 0
+                for n in copytree(srcname, dstname, symlinks, ignore, overwrite):
+                    yield done + n
+                done += n
             else:
                 # Will raise a SpecialFileError for unsupported file types
-                d = 0
-                for d in copy2(srcname, dstname,
-                        overwrite=overwrite, symlinks=symlinks):
-                    yield done + d
-                done += d
+                n = 0
+                for n in copy2(srcname, dstname, overwrite=overwrite, symlinks=symlinks):
+                    yield done + n
+                done += n
         # catch the Error from the recursive copytree so that we can
         # continue with other files
         except Error as err:
@@ -221,64 +251,9 @@ def copytree(src, dst, symlinks=False, ignore=None, overwrite=False):
             # Copying file access times may fail on Windows
             pass
         else:
-            errors.extend((src, dst, str(why)))
+            errors.append((src, dst, str(why)))
     if errors:
         raise Error(errors)
-
-
-def rmtree(path, ignore_errors=False, onerror=None):
-    """Recursively delete a directory tree.
-
-    If ignore_errors is set, errors are ignored; otherwise, if onerror
-    is set, it is called to handle the error with arguments (func,
-    path, exc_info) where func is os.listdir, os.remove, or os.rmdir;
-    path is the argument to that function that caused it to fail; and
-    exc_info is a tuple returned by sys.exc_info().  If ignore_errors
-    is false and onerror is None, an exception is raised.
-
-    """
-    if ignore_errors:
-        def onerror(*args):
-            pass
-    elif onerror is None:
-        def onerror(*args):
-            raise
-    try:
-        if os.path.islink(path):
-            # symlinks to directories are forbidden, see bug #1669
-            raise OSError("Cannot call rmtree on a symbolic link")
-    except OSError:
-        onerror(os.path.islink, path, sys.exc_info())
-        # can't continue even if onerror hook returns
-        return
-    names = []
-    try:
-        names = os.listdir(path)
-    except os.error as err:
-        onerror(os.listdir, path, sys.exc_info())
-    for name in names:
-        fullname = os.path.join(path, name)
-        try:
-            mode = os.lstat(fullname).st_mode
-        except os.error:
-            mode = 0
-        if stat.S_ISDIR(mode):
-            rmtree(fullname, ignore_errors, onerror)
-        else:
-            try:
-                os.remove(fullname)
-            except os.error as err:
-                onerror(os.remove, fullname, sys.exc_info())
-    try:
-        os.rmdir(path)
-    except os.error:
-        onerror(os.rmdir, path, sys.exc_info())
-
-
-def _basename(path):
-    # A basename() variant which first strips the trailing slash, if present.
-    # Thus we always get the last component of the path, even for directories.
-    return os.path.basename(path.rstrip(os.path.sep))
 
 
 def move(src, dst, overwrite=False):
@@ -298,7 +273,15 @@ def move(src, dst, overwrite=False):
     the issues this implementation glosses over.
 
     """
-    real_dst = os.path.join(dst, _basename(src))
+    real_dst = dst
+    if os.path.isdir(dst):
+        if _samefile(src, dst):
+            # We might be on a case insensitive filesystem,
+            # perform the rename anyway.
+            os.rename(src, dst)
+            return
+
+        real_dst = os.path.join(dst, _basename(src))
     if not overwrite:
         real_dst = get_safe_path(real_dst)
     try:
@@ -314,15 +297,3 @@ def move(src, dst, overwrite=False):
             for done in copy2(src, real_dst, symlinks=True, overwrite=overwrite):
                 yield done
             os.unlink(src)
-
-
-def _destinsrc(src, dst):
-    src = abspath(src)
-    dst = abspath(dst)
-    if not src.endswith(os.path.sep):
-        src += os.path.sep
-    if not dst.endswith(os.path.sep):
-        dst += os.path.sep
-    return dst.startswith(src)
-
-# vi: expandtab sts=4 ts=4 sw=4

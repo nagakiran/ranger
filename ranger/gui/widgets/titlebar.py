@@ -6,11 +6,13 @@
 It displays the current path among other things.
 """
 
+from __future__ import (absolute_import, division, print_function)
+
 from os.path import basename
 
+from ranger.gui.bar import Bar
 
 from . import Widget
-from ranger.gui.bar import Bar
 
 
 class TitleBar(Widget):
@@ -18,9 +20,9 @@ class TitleBar(Widget):
     old_keybuffer = None
     old_wid = None
     result = None
+    right_sumsize = 0
     throbber = ' '
     need_redraw = False
-    tab_width = 0
 
     def __init__(self, *args, **keywords):
         Widget.__init__(self, *args, **keywords)
@@ -41,8 +43,7 @@ class TitleBar(Widget):
         self._print_result(self.result)
         if self.wid > 2:
             self.color('in_titlebar', 'throbber')
-            self.addnstr(self.y, self.wid - 2 - self.tab_width,
-                    self.throbber, 1)
+            self.addnstr(self.y, self.wid - self.right_sumsize, self.throbber, 1)
 
     def click(self, event):
         """Handle a MouseEvent"""
@@ -56,7 +57,7 @@ class TitleBar(Widget):
             return False
 
         pos = self.wid - 1
-        for tabname in reversed(self.fm._get_tab_list()):
+        for tabname in reversed(self.fm.get_tab_list()):
             tabtext = self._get_tab_text(tabname)
             pos -= len(tabtext)
             if event.x > pos:
@@ -68,15 +69,11 @@ class TitleBar(Widget):
         for i, part in enumerate(self.result):
             pos += len(part)
             if event.x < pos:
-                if i < 2:
+                if self.settings.hostname_in_titlebar and i <= 2:
                     self.fm.enter_dir("~")
-                elif i == 2:
-                    self.fm.enter_dir("/")
                 else:
-                    try:
+                    if 'directory' in part.__dict__:
                         self.fm.enter_dir(part.directory)
-                    except Exception:
-                        pass
                 return True
         return False
 
@@ -88,19 +85,21 @@ class TitleBar(Widget):
             bar.shrink_from_the_left(self.wid)
         except ValueError:
             bar.shrink_by_removing(self.wid)
+        self.right_sumsize = bar.right.sumsize()
         self.result = bar.combine()
 
     def _get_left_part(self, bar):
         # TODO: Properly escape non-printable chars without breaking unicode
-        if self.fm.username == 'root':
-            clr = 'bad'
-        else:
-            clr = 'good'
+        if self.settings.hostname_in_titlebar:
+            if self.fm.username == 'root':
+                clr = 'bad'
+            else:
+                clr = 'good'
 
-        bar.add(self.fm.username, 'hostname', clr, fixed=True)
-        bar.add('@', 'hostname', clr, fixed=True)
-        bar.add(self.fm.hostname, 'hostname', clr, fixed=True)
-        bar.add(' ', 'hostname', clr, fixed=True)
+            bar.add(self.fm.username, 'hostname', clr, fixed=True)
+            bar.add('@', 'hostname', clr, fixed=True)
+            bar.add(self.fm.hostname, 'hostname', clr, fixed=True)
+            bar.add(' ', 'hostname', clr, fixed=True)
 
         pathway = self.fm.thistab.pathway
         if self.settings.tilde_in_titlebar and \
@@ -123,15 +122,14 @@ class TitleBar(Widget):
 
     def _get_right_part(self, bar):
         # TODO: fix that pressed keys are cut off when chaining CTRL keys
-        kb = str(self.fm.ui.keybuffer)
-        self.old_keybuffer = kb
-        bar.addright(kb, 'keybuffer', fixed=True)
-        bar.addright('  ', 'space', fixed=True)
-        self.tab_width = 0
+        kbuf = str(self.fm.ui.keybuffer)
+        self.old_keybuffer = kbuf
+        bar.addright(' ', 'space', fixed=True)
+        bar.addright(kbuf, 'keybuffer', fixed=True)
+        bar.addright(' ', 'space', fixed=True)
         if len(self.fm.tabs) > 1:
-            for tabname in self.fm._get_tab_list():
+            for tabname in self.fm.get_tab_list():
                 tabtext = self._get_tab_text(tabname)
-                self.tab_width += len(tabtext)
                 clr = 'good' if tabname == self.fm.current_tab else 'bad'
                 bar.addright(tabtext, 'tab', clr, fixed=True)
 

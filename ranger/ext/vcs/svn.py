@@ -3,6 +3,8 @@
 
 """Subversion module"""
 
+from __future__ import (absolute_import, division, print_function)
+
 from datetime import datetime
 import os
 from xml.etree import ElementTree as etree

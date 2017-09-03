@@ -18,8 +18,13 @@ has been defined.
 False
 """
 
+from __future__ import (absolute_import, division, print_function)
+
+import math
+
 
 class Direction(dict):
+
     def __init__(self, dictionary=None, **keywords):
         if dictionary is not None:
             dict.__init__(self, dictionary)
@@ -35,23 +40,23 @@ class Direction(dict):
     def _get_bool(self, first, second, fallback=None):
         try:
             return self[first]
-        except Exception:
+        except KeyError:
             try:
                 return not self[second]
-            except Exception:
+            except KeyError:
                 return fallback
 
     def _get_direction(self, first, second, fallback=0):
         try:
             return self[first]
-        except Exception:
+        except KeyError:
             try:
                 return -self[second]
-            except Exception:
+            except KeyError:
                 return fallback
 
-    def up(self):
-        return -Direction.down(self)
+    def up(self):  # pylint: disable=invalid-name
+        return -Direction.down(self)  # pylint: disable=invalid-unary-operand-type
 
     def down(self):
         return Direction._get_direction(self, 'down', 'up')
@@ -63,7 +68,7 @@ class Direction(dict):
         return Direction._get_bool(self, 'absolute', 'relative')
 
     def left(self):
-        return -Direction.right(self)
+        return -Direction.right(self)  # pylint: disable=invalid-unary-operand-type
 
     def relative(self):
         return not Direction.absolute(self)
@@ -89,13 +94,13 @@ class Direction(dict):
         return 'percentage' in self and self['percentage']
 
     def cycle(self):
-        return self.get('cycle') in ('true', 'on', 'yes')
+        return self.get('cycle') in (True, 'true', 'on', 'yes')
 
     def multiply(self, n):
         for key in ('up', 'right', 'down', 'left'):
             try:
                 self[key] *= n
-            except Exception:
+            except KeyError:
                 pass
 
     def set(self, n):
@@ -103,8 +108,8 @@ class Direction(dict):
             if key in self:
                 self[key] = n
 
-    def move(self, direction, override=None, minimum=0, maximum=9999,
-            current=0, pagesize=1, offset=0):
+    def move(self, direction, override=None, minimum=0,  # pylint: disable=too-many-arguments
+             maximum=9999, current=0, pagesize=1, offset=0):
         """Calculates the new position in a given boundary.
 
         Example:
@@ -130,21 +135,35 @@ class Direction(dict):
         if self.pages():
             pos *= pagesize
         elif self.percentage():
-            pos *= maximum / 100.0
+            pos *= maximum / 100
         if self.absolute():
             if pos < minimum:
                 pos += maximum
         else:
             pos += current
         if self.cycle():
-            return minimum + pos % (maximum + offset - minimum)
-        return int(max(min(pos, maximum + offset - 1), minimum))
+            cycles, pos = divmod(pos, (maximum + offset - minimum))
+            self['_move_cycles'] = int(cycles)
+            ret = minimum + pos
+        else:
+            ret = max(min(pos, maximum + offset - 1), minimum)
+        # Round towards the direction we're moving from.
+        # From the UI point of view, round down. See: #912.
+        if direction < 0:
+            ret = int(math.ceil(ret))
+        else:
+            ret = int(ret)
+        return ret
+
+    def move_cycles(self):
+        return self.get('_move_cycles', 0)
 
     def select(self, lst, current, pagesize, override=None, offset=1):
         dest = self.move(direction=self.down(), override=override,
-            current=current, pagesize=pagesize, minimum=0, maximum=len(lst) + 1)
+                         current=current, pagesize=pagesize, minimum=0, maximum=len(lst) + 1)
         selection = lst[min(current, dest):max(current, dest) + offset]
         return dest + offset - 1, selection
+
 
 if __name__ == '__main__':
     import doctest

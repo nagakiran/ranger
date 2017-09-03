@@ -57,6 +57,8 @@ True
 True
 """
 
+from __future__ import (absolute_import, division, print_function)
+
 import weakref
 from types import MethodType
 
@@ -82,7 +84,7 @@ class Signal(dict):
         self.stopped = True
 
 
-class SignalHandler:
+class SignalHandler(object):  # pylint: disable=too-few-public-methods
     """Signal Handlers contain information about a signal binding.
 
     They are returned by signal_bind() and have to be passed to signal_unbind()
@@ -94,14 +96,15 @@ class SignalHandler:
     active = True
 
     def __init__(self, signal_name, function, priority, pass_signal):
-        self._priority = max(0, min(1, priority))
-        self._signal_name = signal_name
-        self._function = function
-        self._pass_signal = pass_signal
+        self.priority = max(0, min(1, priority))
+        self.signal_name = signal_name
+        self.function = function
+        self.pass_signal = pass_signal
 
 
 class SignalDispatcher(object):
     """This abstract class handles the binding and emitting of signals."""
+
     def __init__(self):
         self._signals = dict()
 
@@ -109,7 +112,7 @@ class SignalDispatcher(object):
         """Remove all signals."""
         for handler_list in self._signals.values():
             for handler in handler_list:
-                handler._function = None
+                handler.function = None
         self._signals = dict()
 
     def signal_bind(self, signal_name, function, priority=0.5, weak=False, autosort=True):
@@ -134,7 +137,7 @@ class SignalDispatcher(object):
         assert isinstance(weak, bool)
         try:
             handlers = self._signals[signal_name]
-        except Exception:
+        except KeyError:
             handlers = self._signals[signal_name] = []
         nargs = function.__code__.co_argcount
 
@@ -148,7 +151,8 @@ class SignalDispatcher(object):
         handler = SignalHandler(signal_name, function, priority, nargs > 0)
         handlers.append(handler)
         if autosort:
-            handlers.sort(key=lambda handler: -handler._priority)
+            handlers.sort(
+                key=lambda handler: -handler.priority)
         return handler
 
     def signal_force_sort(self, signal_name=None):
@@ -159,9 +163,11 @@ class SignalDispatcher(object):
         """
         if signal_name is None:
             for handlers in self._signals.values():
-                handlers.sort(key=lambda handler: -handler._priority)
+                handlers.sort(
+                    key=lambda handler: -handler.priority)
         elif signal_name in self._signals:
-            self._signals[signal_name].sort(key=lambda handler: -handler._priority)
+            self._signals[signal_name].sort(
+                key=lambda handler: -handler.priority)
         else:
             return False
 
@@ -172,14 +178,15 @@ class SignalDispatcher(object):
         signal_bind().
         """
         try:
-            handlers = self._signals[signal_handler._signal_name]
-        except Exception:
+            handlers = self._signals[
+                signal_handler.signal_name]
+        except KeyError:
             pass
         else:
+            signal_handler.function = None
             try:
-                signal_handler._function = None
                 handlers.remove(signal_handler)
-            except Exception:
+            except IndexError:
                 pass
 
     def signal_garbage_collect(self):
@@ -220,12 +227,12 @@ class SignalDispatcher(object):
                 i -= 1
                 handler = handler_list[i]
                 try:
-                    if isinstance(handler._function, tuple):
-                        handler._function[1].__class__
+                    if isinstance(handler.function, tuple):
+                        handler.function[1].__class__  # pylint: disable=pointless-statement
                     else:
-                        handler._function.__class__
+                        handler.function.__class__  # pylint: disable=pointless-statement
                 except ReferenceError:
-                    handler._function = None
+                    handler.function = None
                     del handler_list[i]
 
     def signal_emit(self, signal_name, **kw):
@@ -251,16 +258,16 @@ class SignalDispatcher(object):
         for handler in tuple(handlers):
             if handler.active:
                 try:
-                    if isinstance(handler._function, tuple):
-                        fnc = MethodType(*handler._function)
+                    if isinstance(handler.function, tuple):
+                        fnc = MethodType(*handler.function)
                     else:
-                        fnc = handler._function
-                    if handler._pass_signal:
+                        fnc = handler.function
+                    if handler.pass_signal:
                         fnc(signal)
                     else:
                         fnc()
                 except ReferenceError:
-                    handler._function = None
+                    handler.function = None
                     handlers.remove(handler)
                 if signal.stopped:
                     return False

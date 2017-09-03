@@ -1,21 +1,26 @@
 # This file is part of ranger, the console file manager.
 # License: GNU GPL version 3, see the file "AUTHORS" for details.
 
+from __future__ import (absolute_import, division, print_function)
+
 from collections import deque
-from time import time, sleep
 from subprocess import Popen, PIPE
+from time import time, sleep
+import math
+import os.path
+import select
+import sys
+import errno
+
+try:
+    import chardet  # pylint: disable=import-error
+    HAVE_CHARDET = True
+except ImportError:
+    HAVE_CHARDET = False
+
 from ranger.core.shared import FileManagerAware
 from ranger.ext.signals import SignalDispatcher
 from ranger.ext.human_readable import human_readable
-import math
-import os.path
-import sys
-import select
-try:
-    import chardet
-    HAVE_CHARDET = True
-except Exception:
-    HAVE_CHARDET = False
 
 
 class Loadable(object):
@@ -36,14 +41,14 @@ class Loadable(object):
     def unpause(self):
         try:
             del self.paused
-        except Exception:
+        except AttributeError:
             pass
 
     def destroy(self):
         pass
 
 
-class CopyLoader(Loadable, FileManagerAware):
+class CopyLoader(Loadable, FileManagerAware):  # pylint: disable=too-many-instance-attributes
     progressbar_supported = True
 
     def __init__(self, copy_buffer, do_cut=False, overwrite=False):
@@ -60,7 +65,7 @@ class CopyLoader(Loadable, FileManagerAware):
     def _calculate_size(self, step):
         from os.path import join
         size = 0
-        stack = [f.path for f in self.copy_buffer]
+        stack = [fobj.path for fobj in self.copy_buffer]
         while stack:
             fname = stack.pop()
             if os.path.islink(fname):
@@ -70,68 +75,72 @@ class CopyLoader(Loadable, FileManagerAware):
             else:
                 try:
                     fstat = os.stat(fname)
-                except Exception:
+                except OSError:
                     continue
                 size += max(step, math.ceil(fstat.st_size / step) * step)
         return size
 
     def generate(self):
+        if not self.copy_buffer:
+            return
+
         from ranger.ext import shutil_generatorized as shutil_g
-        if self.copy_buffer:
-            # TODO: Don't calculate size when renaming (needs detection)
-            bytes_per_tick = shutil_g.BLOCK_SIZE
-            size = max(1, self._calculate_size(bytes_per_tick))
-            size_str = " (" + human_readable(self._calculate_size(1)) + ")"
-            done = 0
-            if self.do_cut:
-                self.original_copy_buffer.clear()
-                if len(self.copy_buffer) == 1:
-                    self.description = "moving: " + self.one_file.path + size_str
-                else:
-                    self.description = "moving files from: " + self.one_file.dirname + size_str
-                for f in self.copy_buffer:
-                    for tf in self.fm.tags.tags:
-                        if tf == f.path or str(tf).startswith(f.path):
-                            tag = self.fm.tags.tags[tf]
-                            self.fm.tags.remove(tf)
-                            self.fm.tags.tags[tf.replace(f.path, self.original_path
-                                    + '/' + f.basename)] = tag
-                            self.fm.tags.dump()
-                    d = 0
-                    for d in shutil_g.move(src=f.path,
-                            dst=self.original_path,
-                            overwrite=self.overwrite):
-                        self.percent = float(done + d) / size * 100.
-                        yield
-                    done += d
+        # TODO: Don't calculate size when renaming (needs detection)
+        bytes_per_tick = shutil_g.BLOCK_SIZE
+        size = max(1, self._calculate_size(bytes_per_tick))
+        size_str = " (" + human_readable(self._calculate_size(1)) + ")"
+        done = 0
+        if self.do_cut:
+            self.original_copy_buffer.clear()
+            if len(self.copy_buffer) == 1:
+                self.description = "moving: " + self.one_file.path + size_str
             else:
-                if len(self.copy_buffer) == 1:
-                    self.description = "copying: " + self.one_file.path + size_str
+                self.description = "moving files from: " + self.one_file.dirname + size_str
+            for fobj in self.copy_buffer:
+                for path in self.fm.tags.tags:
+                    if path == fobj.path or str(path).startswith(fobj.path):
+                        tag = self.fm.tags.tags[path]
+                        self.fm.tags.remove(path)
+                        self.fm.tags.tags[
+                            path.replace(fobj.path, self.original_path + '/' + fobj.basename)
+                        ] = tag
+                        self.fm.tags.dump()
+                n = 0
+                for n in shutil_g.move(src=fobj.path, dst=self.original_path,
+                                       overwrite=self.overwrite):
+                    self.percent = ((done + n) / size) * 100.
+                    yield
+                done += n
+        else:
+            if len(self.copy_buffer) == 1:
+                self.description = "copying: " + self.one_file.path + size_str
+            else:
+                self.description = "copying files from: " + self.one_file.dirname + size_str
+            for fobj in self.copy_buffer:
+                if os.path.isdir(fobj.path) and not os.path.islink(fobj.path):
+                    n = 0
+                    for n in shutil_g.copytree(
+                            src=fobj.path,
+                            dst=os.path.join(self.original_path, fobj.basename),
+                            symlinks=True,
+                            overwrite=self.overwrite,
+                    ):
+                        self.percent = ((done + n) / size) * 100.
+                        yield
+                    done += n
                 else:
-                    self.description = "copying files from: " + self.one_file.dirname + size_str
-                for f in self.copy_buffer:
-                    if os.path.isdir(f.path) and not os.path.islink(f.path):
-                        d = 0
-                        for d in shutil_g.copytree(src=f.path,
-                                dst=os.path.join(self.original_path, f.basename),
-                                symlinks=True,
-                                overwrite=self.overwrite):
-                            self.percent = float(done + d) / size * 100.
-                            yield
-                        done += d
-                    else:
-                        d = 0
-                        for d in shutil_g.copy2(f.path, self.original_path,
-                                symlinks=True,
-                                overwrite=self.overwrite):
-                            self.percent = float(done + d) / size * 100.
-                            yield
-                        done += d
-            cwd = self.fm.get_directory(self.original_path)
-            cwd.load_content()
+                    n = 0
+                    for n in shutil_g.copy2(fobj.path, self.original_path,
+                                            symlinks=True, overwrite=self.overwrite):
+                        self.percent = ((done + n) / size) * 100.
+                        yield
+                    done += n
+        cwd = self.fm.get_directory(self.original_path)
+        cwd.load_content()
 
 
-class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
+class CommandLoader(  # pylint: disable=too-many-instance-attributes
+        Loadable, SignalDispatcher, FileManagerAware):
     """Run an external command with the loader.
 
     Output from stderr will be reported.  Ensure that the process doesn't
@@ -141,8 +150,9 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
     finished = False
     process = None
 
-    def __init__(self, args, descr, silent=False, read=False, input=None,
-            kill_on_pause=False, popenArgs=None):
+    def __init__(self, args, descr,  # pylint: disable=too-many-arguments
+                 silent=False, read=False, input=None,  # pylint: disable=redefined-builtin
+                 kill_on_pause=False, popenArgs=None):
         SignalDispatcher.__init__(self)
         Loadable.__init__(self, self.generate(), descr)
         self.args = args
@@ -151,18 +161,14 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
         self.stdout_buffer = ""
         self.input = input
         self.kill_on_pause = kill_on_pause
-        self.popenArgs = popenArgs
+        self.popenArgs = popenArgs  # pylint: disable=invalid-name
 
-    def generate(self):
+    def generate(self):  # pylint: disable=too-many-branches,too-many-statements
         py3 = sys.version_info[0] >= 3
-        if self.input:
-            stdin = PIPE
-        else:
-            stdin = open(os.devnull, 'r')
-        popenArgs = {} if self.popenArgs is None else self.popenArgs
-        popenArgs['stdout'] = popenArgs['stderr'] = PIPE
-        popenArgs['stdin'] = stdin
-        self.process = process = Popen(self.args, **popenArgs)
+        popenargs = {} if self.popenArgs is None else self.popenArgs
+        popenargs['stdout'] = popenargs['stderr'] = PIPE
+        popenargs['stdin'] = PIPE if self.input else open(os.devnull, 'r')
+        self.process = process = Popen(self.args, **popenargs)
         self.signal_emit('before', process=process, loader=self)
         if self.input:
             if py3:
@@ -172,11 +178,11 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
                 stdin = process.stdin
             try:
                 stdin.write(self.input)
-            except IOError as e:
-                if e.errno != errno.EPIPE and e.errno != errno.EINVAL:
+            except IOError as ex:
+                if ex.errno != errno.EPIPE and ex.errno != errno.EINVAL:
                     raise
             stdin.close()
-        if self.silent and not self.read:
+        if self.silent and not self.read:  # pylint: disable=too-many-nested-blocks
             while process.poll() is None:
                 yield
                 if self.finished:
@@ -193,19 +199,19 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
                 if self.finished:
                     break
                 try:
-                    rd, _, __ = select.select(selectlist, [], [], 0.03)
-                    if rd:
-                        rd = rd[0]
-                        if rd == process.stderr:
-                            read = rd.readline()
+                    robjs, _, _ = select.select(selectlist, [], [], 0.03)
+                    if robjs:
+                        robjs = robjs[0]
+                        if robjs == process.stderr:
+                            read = robjs.readline()
                             if py3:
-                                read = safeDecode(read)
+                                read = safe_decode(read)
                             if read:
                                 self.fm.notify(read, bad=True)
-                        elif rd == process.stdout:
-                            read = rd.read(512)
+                        elif robjs == process.stdout:
+                            read = robjs.read(512)
                             if py3:
-                                read = safeDecode(read)
+                                read = safe_decode(read)
                             if read:
                                 self.stdout_buffer += read
                 except select.error:
@@ -213,12 +219,12 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
             if not self.silent:
                 for line in process.stderr:
                     if py3:
-                        line = safeDecode(line)
+                        line = safe_decode(line)
                     self.fm.notify(line, bad=True)
             if self.read:
                 read = process.stdout.read()
                 if py3:
-                    read = safeDecode(read)
+                    read = safe_decode(read)
                 self.stdout_buffer += read
         self.finished = True
         self.signal_emit('after', process=process, loader=self)
@@ -236,7 +242,7 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
                 return
             try:
                 self.process.send_signal(20)
-            except Exception:
+            except OSError:
                 pass
             Loadable.pause(self)
             self.signal_emit('pause', process=self.process, loader=self)
@@ -245,7 +251,7 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
         if not self.finished and self.paused:
             try:
                 self.process.send_signal(18)
-            except Exception:
+            except OSError:
                 pass
             Loadable.unpause(self)
             self.signal_emit('unpause', process=self.process, loader=self)
@@ -259,15 +265,15 @@ class CommandLoader(Loadable, SignalDispatcher, FileManagerAware):
                 pass
 
 
-def safeDecode(string):
+def safe_decode(string):
     try:
         return string.decode("utf-8")
-    except (UnicodeDecodeError):
+    except UnicodeDecodeError:
         if HAVE_CHARDET:
-            codec = chardet.detect(string)["encoding"]
-            return string.decode(codec, 'ignore')
-        else:
-            return ""
+            encoding = chardet.detect(string)["encoding"]
+            if encoding:
+                return string.decode(encoding, 'ignore')
+        return ""
 
 
 class Loader(FileManagerAware):
@@ -286,6 +292,7 @@ class Loader(FileManagerAware):
         self.throbber_status = 0
         self.rotate()
         self.old_item = None
+        self.status = None
 
     def rotate(self):
         """Rotate the throbber"""
@@ -314,19 +321,19 @@ class Loader(FileManagerAware):
         else:
             obj.unpause()
 
-    def move(self, _from, to):
+    def move(self, pos_src, pos_dest):
         try:
-            item = self.queue[_from]
+            item = self.queue[pos_src]
         except IndexError:
             return
 
-        del self.queue[_from]
+        del self.queue[pos_src]
 
-        if to == 0:
+        if pos_dest == 0:
             self.queue.appendleft(item)
-            if _from != 0:
+            if pos_src != 0:
                 self.queue[1].pause()
-        elif to == -1:
+        elif pos_dest == -1:
             self.queue.append(item)
         else:
             raise NotImplementedError
@@ -399,16 +406,25 @@ class Loader(FileManagerAware):
 
         end_time = time() + self.seconds_of_work_time
 
-        try:
-            while time() < end_time:
+        while time() < end_time:
+            try:
                 next(item.load_generator)
+            except StopIteration:
+                self._remove_current_process(item)
+                break
+            except Exception as ex:  # pylint: disable=broad-except
+                self.fm.notify(
+                    'Loader work process failed: {0} (Percent: {1})'.format(
+                        item.description, item.percent),
+                    bad=True,
+                    exception=ex,
+                )
+                self.old_item = None
+                self._remove_current_process(item)
+                break
+        else:
             if item.progressbar_supported:
                 self.fm.ui.status.request_redraw()
-        except StopIteration:
-            self._remove_current_process(item)
-        except Exception as err:
-            self.fm.notify(err)
-            self._remove_current_process(item)
 
     def _remove_current_process(self, item):
         item.load_generator = None

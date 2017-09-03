@@ -1,20 +1,26 @@
 # This file is part of ranger, the console file manager.
 # License: GNU GPL version 3, see the file "AUTHORS" for details.
 
-from inspect import isfunction
-from ranger.ext.signals import SignalDispatcher, Signal
-from ranger.core.shared import FileManagerAware
-from ranger.gui.colorscheme import _colorscheme_name_to_class
+from __future__ import (absolute_import, division, print_function)
+
 import re
 import os.path
+from inspect import isfunction
+
+import ranger
+from ranger.ext.signals import SignalDispatcher
+from ranger.core.shared import FileManagerAware
+from ranger.gui.colorscheme import _colorscheme_name_to_class
 
 # Use these priority constants to trigger events at specific points in time
 # during processing of the signals "setopt" and "setopt.<some_setting_name>"
+# pylint: disable=bad-whitespace
 SIGNAL_PRIORITY_RAW        = 2.0  # signal.value will be raw
 SIGNAL_PRIORITY_SANITIZE   = 1.0  # (Internal) post-processing signal.value
 SIGNAL_PRIORITY_BETWEEN    = 0.6  # sanitized signal.value, old fm.settings.XYZ
 SIGNAL_PRIORITY_SYNC       = 0.2  # (Internal) updating fm.settings.XYZ
 SIGNAL_PRIORITY_AFTER_SYNC = 0.1  # after fm.settings.XYZ was updated
+# pylint: enable=bad-whitespace
 
 
 ALLOWED_SETTINGS = {
@@ -22,6 +28,8 @@ ALLOWED_SETTINGS = {
     'autosave_bookmarks': bool,
     'autoupdate_cumulative_size': bool,
     'cd_bookmarks': bool,
+    'cd_tab_case': str,
+    'cd_tab_smart': bool,
     'collapse_preview': bool,
     'colorscheme': str,
     'column_ratios': (tuple, list),
@@ -33,6 +41,8 @@ ALLOWED_SETTINGS = {
     'draw_borders': bool,
     'draw_progress_bar_in_status_bar': bool,
     'flushinput': bool,
+    'freeze_files': bool,
+    'global_inode_type_filter': str,
     'hidden_filter': str,
     'idle_delay': int,
     'line_numbers': str,
@@ -61,6 +71,7 @@ ALLOWED_SETTINGS = {
     'sort_unicode': bool,
     'sort': str,
     'status_bar_on_top': bool,
+    'hostname_in_titlebar': bool,
     'tilde_in_titlebar': bool,
     'unicode_ellipsis': bool,
     'update_title': bool,
@@ -72,18 +83,21 @@ ALLOWED_SETTINGS = {
     'vcs_backend_git': str,
     'vcs_backend_hg': str,
     'vcs_backend_svn': str,
+    'wrap_scroll': bool,
     'xterm_alt_key': bool,
     'clear_filters_on_dir_change': bool,
+    'save_tabs_on_exit': bool,
 }
 
 ALLOWED_VALUES = {
-    'confirm_on_delete': ['always', 'multiple', 'never'],
+    'cd_tab_case': ['sensitive', 'insensitive', 'smart'],
+    'confirm_on_delete': ['multiple', 'always', 'never'],
     'line_numbers': ['false', 'absolute', 'relative'],
     'preview_images_method': ['w3m', 'iterm2', 'urxvt', 'urxvt-full'],
-    'vcs_backend_bzr': ['enabled', 'local', 'disabled'],
-    'vcs_backend_git': ['enabled', 'local', 'disabled'],
-    'vcs_backend_hg': ['enabled', 'local', 'disabled'],
-    'vcs_backend_svn': ['enabled', 'local', 'disabled'],
+    'vcs_backend_bzr': ['disabled', 'local', 'enabled'],
+    'vcs_backend_git': ['enabled', 'disabled', 'local'],
+    'vcs_backend_hg': ['disabled', 'local', 'enabled'],
+    'vcs_backend_svn': ['disabled', 'local', 'enabled'],
     'viewmode': ['miller', 'multipane'],
 }
 
@@ -98,6 +112,7 @@ DEFAULT_VALUES = {
 
 
 class Settings(SignalDispatcher, FileManagerAware):
+
     def __init__(self):
         SignalDispatcher.__init__(self)
         self.__dict__['_localsettings'] = dict()
@@ -105,12 +120,14 @@ class Settings(SignalDispatcher, FileManagerAware):
         self.__dict__['_tagsettings'] = dict()
         self.__dict__['_settings'] = dict()
         for name in ALLOWED_SETTINGS:
-            self.signal_bind('setopt.' + name,
-                    self._sanitize,
-                    priority=SIGNAL_PRIORITY_SANITIZE)
-            self.signal_bind('setopt.' + name,
-                    self._raw_set_with_signal,
-                    priority=SIGNAL_PRIORITY_SYNC)
+            self.signal_bind('setopt.' + name, self._sanitize,
+                             priority=SIGNAL_PRIORITY_SANITIZE)
+            self.signal_bind('setopt.' + name, self._raw_set_with_signal,
+                             priority=SIGNAL_PRIORITY_SYNC)
+        for name, values in ALLOWED_VALUES.items():
+            assert values
+            assert name in ALLOWED_SETTINGS
+            self._raw_set(name, values[0])
 
     def _sanitize(self, signal):
         name, value = signal.setting, signal.value
@@ -122,7 +139,7 @@ class Settings(SignalDispatcher, FileManagerAware):
                 signal.value = [1, 1]
             else:
                 signal.value = [int(i) if str(i).isdigit() else 1
-                        for i in value]
+                                for i in value]
 
         elif name == 'colorscheme':
             _colorscheme_name_to_class(signal)
@@ -133,13 +150,13 @@ class Settings(SignalDispatcher, FileManagerAware):
                 if os.path.exists(result):
                     signal.value = result
                 else:
+                    self.fm.notify("Preview script `{0}` doesn't exist!".format(result), bad=True)
                     signal.value = None
 
         elif name == 'use_preview_script':
-            if self._settings['preview_script'] is None and value \
-                    and self.fm.ui.is_on:
+            if self._settings.get('preview_script') is None and value and self.fm.ui.is_on:
                 self.fm.notify("Preview script undefined or not found!",
-                        bad=True)
+                               bad=True)
 
     def set(self, name, value, path=None, tags=None):
         assert name in ALLOWED_SETTINGS, "No such setting: {0}!".format(name)
@@ -151,9 +168,22 @@ class Settings(SignalDispatcher, FileManagerAware):
         assert not (tags and path), "Can't set a setting for path and tag " \
             "at the same time!"
         kws = dict(setting=name, value=value, previous=previous,
-                path=path, tags=tags, fm=self.fm)
+                   path=path, tags=tags, fm=self.fm)
         self.signal_emit('setopt', **kws)
         self.signal_emit('setopt.' + name, **kws)
+
+    def _get_default(self, name):
+        if name == 'preview_script':
+            if ranger.args.clean:
+                value = self.fm.relpath('data/scope.sh')
+            else:
+                value = self.fm.confpath('scope.sh')
+                if not os.path.exists(value):
+                    value = self.fm.relpath('data/scope.sh')
+        else:
+            value = DEFAULT_VALUES[self.types_of(name)[0]]
+
+        return value
 
     def get(self, name, path=None):
         assert name in ALLOWED_SETTINGS, "No such setting: {0}!".format(name)
@@ -162,28 +192,27 @@ class Settings(SignalDispatcher, FileManagerAware):
         else:
             try:
                 localpath = self.fm.thisdir.path
-            except Exception:
-                localpath = path
+            except AttributeError:
+                localpath = None
 
         if localpath:
             for pattern, regex in self._localregexes.items():
                 if name in self._localsettings[pattern] and\
                         regex.search(localpath):
                     return self._localsettings[pattern][name]
+
         if self._tagsettings and path:
             realpath = os.path.realpath(path)
             if realpath in self.fm.tags:
                 tag = self.fm.tags.marker(realpath)
                 if tag in self._tagsettings and name in self._tagsettings[tag]:
                     return self._tagsettings[tag][name]
-        if name in self._settings:
-            return self._settings[name]
-        else:
-            type_ = self.types_of(name)[0]
-            value = DEFAULT_VALUES[type_]
+
+        if name not in self._settings:
+            value = self._get_default(name)
             self._raw_set(name, value)
             self.__setattr__(name, value)
-            return self._settings[name]
+        return self._settings[name]
 
     def __setattr__(self, name, value):
         if name.startswith('_'):
@@ -194,14 +223,14 @@ class Settings(SignalDispatcher, FileManagerAware):
     def __getattr__(self, name):
         if name.startswith('_'):
             return self.__dict__[name]
-        else:
-            return self.get(name, None)
+        return self.get(name, None)
 
     def __iter__(self):
-        for x in self._settings:
-            yield x
+        for setting in self._settings:
+            yield setting
 
-    def types_of(self, name):
+    @staticmethod
+    def types_of(name):
         try:
             typ = ALLOWED_SETTINGS[name]
         except KeyError:
@@ -209,8 +238,7 @@ class Settings(SignalDispatcher, FileManagerAware):
         else:
             if isinstance(typ, tuple):
                 return typ
-            else:
-                return (typ, )
+            return (typ,)
 
     def _check_type(self, name, value):
         typ = ALLOWED_SETTINGS[name]
@@ -233,8 +261,7 @@ class Settings(SignalDispatcher, FileManagerAware):
             if path not in self._localsettings:
                 try:
                     regex = re.compile(path)
-                except Exception:
-                    # Bad regular expression
+                except re.error:  # Bad regular expression
                     return
                 self._localregexes[path] = regex
                 self._localsettings[path] = dict()
@@ -258,7 +285,8 @@ class Settings(SignalDispatcher, FileManagerAware):
         self._raw_set(signal.setting, signal.value, signal.path, signal.tags)
 
 
-class LocalSettings():
+class LocalSettings(object):  # pylint: disable=too-few-public-methods
+
     def __init__(self, path, parent):
         self.__dict__['_parent'] = parent
         self.__dict__['_path'] = path
@@ -272,12 +300,13 @@ class LocalSettings():
     def __getattr__(self, name):
         if name.startswith('_'):
             return self.__dict__[name]
-        else:
-            return self._parent.get(name, self._path)
+        if name.startswith('signal_'):
+            return getattr(self._parent, name)
+        return self._parent.get(name, self._path)
 
     def __iter__(self):
-        for x in self._parent._settings:
-            yield x
+        for setting in self._parent._settings:  # pylint: disable=protected-access
+            yield setting
 
     __getitem__ = __getattr__
     __setitem__ = __setattr__

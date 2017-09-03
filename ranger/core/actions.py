@@ -1,14 +1,19 @@
 # This file is part of ranger, the console file manager.
 # License: GNU GPL version 3, see the file "AUTHORS" for details.
 
+# pylint: disable=too-many-lines,attribute-defined-outside-init
+
+from __future__ import (absolute_import, division, print_function)
+
 import codecs
 import os
+from os import link, symlink, getcwd, listdir, stat
+from os.path import join, isdir, realpath, exists
 import re
+import shlex
 import shutil
 import string
 import tempfile
-from os.path import join, isdir, realpath, exists
-from os import link, symlink, getcwd, listdir, stat
 from inspect import cleandoc
 from stat import S_IEXEC
 from hashlib import sha1
@@ -28,11 +33,11 @@ from ranger.container.directory import Directory
 from ranger.container.file import File
 from ranger.core.loader import CommandLoader, CopyLoader
 from ranger.container.settings import ALLOWED_SETTINGS, ALLOWED_VALUES
-from ranger.core.linemode import DEFAULT_LINEMODE
+
 
 MACRO_FAIL = "<\x01\x01MACRO_HAS_NO_VALUE\x01\01>"
 
-log = getLogger(__name__)
+LOG = getLogger(__name__)
 
 
 class _MacroTemplate(string.Template):
@@ -41,17 +46,20 @@ class _MacroTemplate(string.Template):
     idpattern = r"[_a-z0-9]*"
 
 
-class Actions(FileManagerAware, SettingsAware):
+class Actions(  # pylint: disable=too-many-instance-attributes,too-many-public-methods
+        FileManagerAware, SettingsAware):
+
     # --------------------------
     # -- Basic Commands
     # --------------------------
 
-    def exit(self):
+    @staticmethod
+    def exit():
         """:exit
 
         Exit the program.
         """
-        raise SystemExit()
+        raise SystemExit
 
     def reset(self):
         """:reset
@@ -66,22 +74,25 @@ class Actions(FileManagerAware, SettingsAware):
         if self.metadata:
             self.metadata.reset()
 
-    def change_mode(self, mode):
+    def change_mode(self, mode=None):
         """:change_mode <mode>
 
         Change mode to "visual" (selection) or "normal" mode.
         """
-        if mode == self.mode:
+        if mode is None:
+            self.fm.notify('Syntax: change_mode <mode>', bad=True)
+            return
+        if mode == self.mode:  # pylint: disable=access-member-before-definition
             return
         if mode == 'visual':
-            self._visual_start       = self.thisdir.pointed_obj
-            self._visual_start_pos   = self.thisdir.pointer
+            self._visual_pos_start = self.thisdir.pointer
+            self._visual_move_cycles = 0
             self._previous_selection = set(self.thisdir.marked_items)
             self.mark_files(val=not self._visual_reverse, movedown=False)
         elif mode == 'normal':
-            if self.mode == 'visual':
-                self._visual_start       = None
-                self._visual_start_pos   = None
+            if self.mode == 'visual':  # pylint: disable=access-member-before-definition
+                self._visual_pos_start = None
+                self._visual_move_cycles = None
                 self._previous_selection = None
         else:
             return
@@ -90,12 +101,12 @@ class Actions(FileManagerAware, SettingsAware):
 
     def set_option_from_string(self, option_name, value, localpath=None, tags=None):
         if option_name not in ALLOWED_SETTINGS:
-            raise ValueError("The option named `%s' does not exist" %
-                    option_name)
+            raise ValueError("The option named `%s' does not exist" % option_name)
         if not isinstance(value, str):
             raise ValueError("The value for an option needs to be a string.")
 
-        self.settings.set(option_name, self._parse_option_value(option_name, value), localpath, tags)
+        self.settings.set(option_name, self._parse_option_value(option_name, value),
+                          localpath, tags)
 
     def _parse_option_value(self, name, value):
         types = self.fm.settings.types_of(name)
@@ -104,7 +115,7 @@ class Actions(FileManagerAware, SettingsAware):
                 return False
             elif value.lower() in ('true', 'on', '1'):
                 return True
-        if type(None) in types and value.lower() == 'none':
+        if isinstance(None, types) and value.lower() == 'none':
             return None
         if int in types:
             try:
@@ -137,28 +148,38 @@ class Actions(FileManagerAware, SettingsAware):
         """
         try:
             cwd = self.thisdir
-        except Exception:
+        except AttributeError:
             pass
         else:
             cwd.unload()
             cwd.load_content()
 
-    def notify(self, text, duration=4, bad=False):
+    def notify(self, obj, duration=4, bad=False, exception=None):
         """:notify <text>
 
         Display the text in the statusbar.
         """
-        if isinstance(text, Exception):
-            if ranger.arg.debug:
-                raise
+        if isinstance(obj, Exception):
+            if ranger.args.debug:
+                raise obj
+            exception = obj
             bad = True
-        elif bad is True and ranger.arg.debug:
-            raise Exception(str(text))
-        text = str(text)
-        log.debug("Command notify invoked: [Bad: {0}, Text: '{1}']".format(bad, text))
+        elif bad and ranger.args.debug:
+            raise Exception(str(obj))
+
+        text = str(obj)
+
+        text_log = 'Notification: {0}'.format(text)
+        if bad:
+            LOG.error(text_log)
+        else:
+            LOG.info(text_log)
+        if exception:
+            LOG.exception(exception)
+
         if self.ui and self.ui.is_on:
             self.ui.status.notify("  ".join(text.split("\n")),
-                    duration=duration, bad=bad)
+                                  duration=duration, bad=bad)
         else:
             print(text)
 
@@ -169,15 +190,15 @@ class Actions(FileManagerAware, SettingsAware):
         """
         try:
             item = self.loader.queue[0]
-        except Exception:
+        except IndexError:
             self.notify("Type Q or :quit<Enter> to exit ranger")
         else:
             self.notify("Aborting: " + item.get_description())
             self.loader.remove(index=0)
 
     def get_cumulative_size(self):
-        for f in self.thistab.get_selection() or ():
-            f.look_up_cumulative_size()
+        for fobj in self.thistab.get_selection() or ():
+            fobj.look_up_cumulative_size()
         self.ui.status.request_redraw()
         self.ui.redraw_main_column()
 
@@ -188,7 +209,8 @@ class Actions(FileManagerAware, SettingsAware):
         """
         self.ui.redraw_window()
 
-    def open_console(self, string='', prompt=None, position=None):
+    def open_console(self, string='',  # pylint: disable=redefined-outer-name
+                     prompt=None, position=None):
         """:open_console [string]
 
         Open the console.
@@ -196,41 +218,45 @@ class Actions(FileManagerAware, SettingsAware):
         self.change_mode('normal')
         self.ui.open_console(string, prompt=prompt, position=position)
 
-    def execute_console(self, string='', wildcards=[], quantifier=None):
+    def execute_console(self, string='',  # pylint: disable=redefined-outer-name
+                        wildcards=None, quantifier=None):
         """:execute_console [string]
 
         Execute a command for the console
         """
         command_name = string.lstrip().split()[0]
-        cmd_class = self.commands.get_command(command_name, abbrev=False)
+        cmd_class = self.commands.get_command(command_name)
         if cmd_class is None:
             self.notify("Command not found: `%s'" % command_name, bad=True)
             return
-        cmd = cmd_class(string)
-        if cmd.resolve_macros and _MacroTemplate.delimiter in string:
+        cmd = cmd_class(string, quantifier=quantifier)
+
+        if cmd.resolve_macros and _MacroTemplate.delimiter in cmd.line:
             macros = dict(('any%d' % i, key_to_string(char))
-                    for i, char in enumerate(wildcards))
+                          for i, char in enumerate(wildcards if wildcards is not None else []))
             if 'any0' in macros:
                 macros['any'] = macros['any0']
             try:
-                string = self.substitute_macros(string, additional=macros,
-                        escape=cmd.escape_macros_for_shell)
-            except ValueError as e:
-                if ranger.arg.debug:
+                line = self.substitute_macros(cmd.line, additional=macros,
+                                              escape=cmd.escape_macros_for_shell)
+            except ValueError as ex:
+                if ranger.args.debug:
                     raise
-                else:
-                    return self.notify(e)
-        try:
-            cmd_class(string, quantifier=quantifier).execute()
-        except Exception as e:
-            if ranger.arg.debug:
-                raise
-            else:
-                self.notify(e)
+                return self.notify(ex)
+            cmd.init_line(line)
 
-    def substitute_macros(self, string, additional=dict(), escape=False):
-        macros = self._get_macros()
-        macros.update(additional)
+        try:
+            cmd.execute()
+        except Exception as ex:  # pylint: disable=broad-except
+            if ranger.args.debug:
+                raise
+            self.notify(ex)
+
+    def substitute_macros(self, string,  # pylint: disable=redefined-outer-name
+                          additional=None, escape=False):
+        macros = self.get_macros()
+        if additional:
+            macros.update(additional)
         if escape:
             for key, value in macros.items():
                 if isinstance(value, list):
@@ -246,11 +272,13 @@ class Actions(FileManagerAware, SettingsAware):
             raise ValueError("Could not apply macros to `%s'" % string)
         return result
 
-    def _get_macros(self):
+    def get_macros(self):  # pylint: disable=too-many-branches,too-many-statements
         macros = {}
 
         macros['rangerdir'] = ranger.RANGERDIR
-        macros['confdir'] = self.fm.confpath()
+        if not ranger.args.clean:
+            macros['confdir'] = self.fm.confpath()
+            macros['datadir'] = self.fm.datapath()
         macros['space'] = ' '
 
         if self.fm.thisfile:
@@ -260,7 +288,7 @@ class Actions(FileManagerAware, SettingsAware):
 
         if self.fm.thistab.get_selection:
             macros['p'] = [os.path.join(self.fm.thisdir.path, fl.relative_path)
-                    for fl in self.fm.thistab.get_selection()]
+                           for fl in self.fm.thistab.get_selection()]
             macros['s'] = [fl.relative_path for fl in self.fm.thistab.get_selection()]
         else:
             macros['p'] = MACRO_FAIL
@@ -273,7 +301,7 @@ class Actions(FileManagerAware, SettingsAware):
 
         if self.fm.thisdir.files:
             macros['t'] = [fl.relative_path for fl in self.fm.thisdir.files
-                    if fl.realpath in (self.fm.tags or [])]
+                           if fl.realpath in self.fm.tags or []]
         else:
             macros['t'] = MACRO_FAIL
 
@@ -286,7 +314,7 @@ class Actions(FileManagerAware, SettingsAware):
         for i in range(1, 10):
             try:
                 tab = self.fm.tabs[i]
-            except Exception:
+            except KeyError:
                 continue
             tabdir = tab.thisdir
             if not tabdir:
@@ -295,7 +323,7 @@ class Actions(FileManagerAware, SettingsAware):
             macros[i + 'd'] = tabdir.path
             if tabdir.get_selection():
                 macros[i + 'p'] = [os.path.join(tabdir.path, fl.relative_path)
-                        for fl in tabdir.get_selection()]
+                                   for fl in tabdir.get_selection()]
                 macros[i + 's'] = [fl.path for fl in tabdir.get_selection()]
             else:
                 macros[i + 'p'] = MACRO_FAIL
@@ -329,7 +357,7 @@ class Actions(FileManagerAware, SettingsAware):
                 macros['F'] = MACRO_FAIL
             if next_tab_dir.get_selection():
                 macros['P'] = [os.path.join(next_tab.path, fl.path)
-                        for fl in next_tab.get_selection()]
+                               for fl in next_tab.get_selection()]
                 macros['S'] = [fl.path for fl in next_tab.get_selection()]
             else:
                 macros['P'] = MACRO_FAIL
@@ -347,20 +375,18 @@ class Actions(FileManagerAware, SettingsAware):
         Load a config file.
         """
         filename = os.path.expanduser(filename)
-        log.debug("Sourcing config file '{0}'".format(filename))
-        with open(filename, 'r') as f:
-            for line in f:
+        LOG.debug("Sourcing config file '%s'", filename)
+        with open(filename, 'r') as fobj:
+            for line in fobj:
                 line = line.strip(" \r\n")
                 if line.startswith("#") or not line.strip():
                     continue
                 try:
                     self.execute_console(line)
-                except Exception as e:
-                    if ranger.arg.debug:
+                except Exception as ex:  # pylint: disable=broad-except
+                    if ranger.args.debug:
                         raise
-                    else:
-                        self.notify('Error in line `%s\':\n  %s' %
-                                (line, str(e)), bad=True)
+                    self.notify('Error in line `%s\':\n  %s' % (line, str(ex)), bad=True)
 
     def execute_file(self, files, **kw):
         """Uses the "rifle" module to open/execute a file
@@ -379,19 +405,26 @@ class Actions(FileManagerAware, SettingsAware):
 
         # ranger can act as a file chooser when running with --choosefile=...
         if mode == 0 and 'label' not in kw:
-            if ranger.arg.choosefile:
-                open(ranger.arg.choosefile, 'w').write(self.fm.thisfile.path)
+            if ranger.args.choosefile:
+                open(ranger.args.choosefile, 'w').write(self.fm.thisfile.path)
 
-            if ranger.arg.choosefiles:
-                open(ranger.arg.choosefiles, 'w').write("".join(
-                    f.path + "\n" for f in self.fm.thistab.get_selection()))
+            if ranger.args.choosefiles:
+                paths = []
+                for hist in self.fm.thistab.history:
+                    for fobj in hist.files:
+                        if fobj.marked and fobj.path not in paths:
+                            paths += [fobj.path]
+                paths += [f.path for f in self.fm.thistab.get_selection() if f.path not in paths]
 
-            if ranger.arg.choosefile or ranger.arg.choosefiles:
-                raise SystemExit()
+                with open(ranger.args.choosefiles, 'w') as fobj:
+                    fobj.write('\n'.join(paths) + '\n')
+
+            if ranger.args.choosefile or ranger.args.choosefiles:
+                raise SystemExit
 
         if isinstance(files, set):
             files = list(files)
-        elif type(files) not in (list, tuple):
+        elif not isinstance(files, (list, tuple)):
             files = [files]
 
         flags = kw.get('flags', '')
@@ -410,7 +443,8 @@ class Actions(FileManagerAware, SettingsAware):
     # -- Moving Around
     # --------------------------
 
-    def move(self, narg=None, **kw):
+    def move(self,  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+             narg=None, **kw):
         """A universal movement method.
 
         Accepts these parameters:
@@ -426,63 +460,75 @@ class Actions(FileManagerAware, SettingsAware):
         self.move(to=80, percentage=True)  # moves to 80%
         """
         cwd = self.thisdir
+        kw.setdefault('cycle', self.fm.settings['wrap_scroll'])
         direction = Direction(kw)
         if 'left' in direction or direction.left() > 0:
             steps = direction.left()
             if narg is not None:
                 steps *= narg
-            try:
-                directory = os.path.join(*(['..'] * steps))
-            except Exception:
-                return
+            directory = os.path.join(*(['..'] * steps))
             self.thistab.enter_dir(directory)
             self.change_mode('normal')
-        if cwd and cwd.accessible and cwd.content_loaded:
-            if 'right' in direction:
-                mode = 0
-                if narg is not None:
-                    mode = narg
-                cf = self.thisfile
-                selection = self.thistab.get_selection()
-                if not self.thistab.enter_dir(cf) and selection:
-                    result = self.execute_file(selection, mode=mode)
-                    if result in (False, ASK_COMMAND):
-                        self.open_console('open_with ')
-            elif direction.vertical() and cwd.files:
-                newpos = direction.move(
-                        direction=direction.down(),
-                        override=narg,
-                        maximum=len(cwd),
-                        current=cwd.pointer,
-                        pagesize=self.ui.browser.hei)
-                cwd.move(to=newpos)
-                if self.mode == 'visual':
-                    try:
-                        startpos = cwd.index(self._visual_start)
-                    except Exception:
-                        self._visual_start = None
-                        startpos = min(self._visual_start_pos, len(cwd))
-                    # The files between here and _visual_start_pos
-                    targets = set(cwd.files[min(startpos, newpos):
-                            max(startpos, newpos) + 1])
-                    # The selection before activating visual mode
-                    old = self._previous_selection
-                    # The current selection
-                    current = set(cwd.marked_items)
 
-                    # Set theory anyone?
-                    if not self._visual_reverse:
-                        for f in targets - current:
-                            cwd.mark_item(f, True)
-                        for f in current - old - targets:
-                            cwd.mark_item(f, False)
+        if not cwd or not cwd.accessible or not cwd.content_loaded:
+            return
+
+        if 'right' in direction:
+            mode = 0
+            if narg is not None:
+                mode = narg
+            tfile = self.thisfile
+            selection = self.thistab.get_selection()
+            if not self.thistab.enter_dir(tfile) and selection:
+                result = self.execute_file(selection, mode=mode)
+                if result in (False, ASK_COMMAND):
+                    self.open_console('open_with ')
+        elif direction.vertical() and cwd.files:
+            pos_new = direction.move(
+                direction=direction.down(),
+                override=narg,
+                maximum=len(cwd),
+                current=cwd.pointer,
+                pagesize=self.ui.browser.hei)
+            cwd.move(to=pos_new)
+            if self.mode == 'visual':
+                pos_start = min(self._visual_pos_start, (len(cwd.files) - 1))
+                self._visual_move_cycles += direction.move_cycles()
+
+                # Haven't cycled
+                if self._visual_move_cycles == 0:
+                    targets = set(cwd.files[min(pos_start, pos_new):(max(pos_start, pos_new) + 1)])
+                # Cycled down once
+                elif self._visual_move_cycles == 1:
+                    if pos_new < pos_start:
+                        targets = set(cwd.files[:(pos_new + 1)] + cwd.files[pos_start:])
                     else:
-                        for f in targets & current:
-                            cwd.mark_item(f, False)
-                        for f in old - current - targets:
-                            cwd.mark_item(f, True)
-                if self.ui.pager.visible:
-                    self.display_file()
+                        targets = set(cwd.files)
+                # Cycled up once
+                elif self._visual_move_cycles == -1:
+                    if pos_new > pos_start:
+                        targets = set(cwd.files[:(pos_start + 1)] + cwd.files[pos_new:])
+                    else:
+                        targets = set(cwd.files)
+                # Cycled more than once
+                else:
+                    targets = set(cwd.files)
+
+                # The current selection
+                current = set(cwd.marked_items)
+                # Set theory anyone?
+                if self._visual_reverse:
+                    for fobj in targets & current:
+                        cwd.mark_item(fobj, False)
+                    for fobj in self._previous_selection - current - targets:
+                        cwd.mark_item(fobj, True)
+                else:
+                    for fobj in targets - current:
+                        cwd.mark_item(fobj, True)
+                    for fobj in current - self._previous_selection - targets:
+                        cwd.mark_item(fobj, False)
+            if self.ui.pager.visible:
+                self.display_file()
 
     def move_parent(self, n, narg=None):
         self.change_mode('normal')
@@ -520,8 +566,8 @@ class Actions(FileManagerAware, SettingsAware):
         cdpath = os.environ.get('CDPATH', None) or os.environ.get('cdpath', None)
         result = self.thistab.enter_dir(path, history=history)
         if result is False and cdpath:
-            for p in cdpath.split(':'):
-                curpath = os.path.join(p, path)
+            for comp in cdpath.split(':'):
+                curpath = os.path.join(comp, path)
                 if os.path.isdir(curpath):
                     result = self.thistab.enter_dir(curpath, history=history)
                     break
@@ -531,16 +577,16 @@ class Actions(FileManagerAware, SettingsAware):
             self.change_mode('normal')
         return result
 
-    def cd(self, path, remember=True):
+    def cd(self, path, remember=True):  # pylint: disable=invalid-name
         """enter the directory at the given path, remember=True"""
         self.enter_dir(path, remember=remember)
 
     def traverse(self):
         self.change_mode('normal')
-        cf = self.thisfile
+        tfile = self.thisfile
         cwd = self.thisdir
-        if cf is not None and cf.is_directory:
-            self.enter_dir(cf.path)
+        if tfile is not None and tfile.is_directory:
+            self.enter_dir(tfile.path)
         elif cwd.pointer >= len(cwd) - 1:
             while True:
                 self.move(left=1)
@@ -571,7 +617,7 @@ class Actions(FileManagerAware, SettingsAware):
     def pager_close(self):
         if self.ui.pager.visible:
             self.ui.close_pager()
-        if hasattr(self.ui.browser, 'pager') and self.ui.browser.pager.visible:
+        if self.ui.browser.pager and self.ui.browser.pager.visible:
             self.ui.close_embedded_pager()
 
     def taskview_open(self):
@@ -583,7 +629,7 @@ class Actions(FileManagerAware, SettingsAware):
     def execute_command(self, cmd, **kw):
         return self.run(cmd, **kw)
 
-    def edit_file(self, file=None):
+    def edit_file(self, file=None):  # pylint: disable=redefined-builtin
         """Calls execute_file with the current file and label='editor'"""
         if file is None:
             file = self.thisfile
@@ -593,7 +639,7 @@ class Actions(FileManagerAware, SettingsAware):
             return
         self.execute_file(file, label='editor')
 
-    def toggle_option(self, string):
+    def toggle_option(self, string):  # pylint: disable=redefined-outer-name
         """:toggle_option <string>
 
         Toggle a boolean option named <string>.
@@ -603,7 +649,7 @@ class Actions(FileManagerAware, SettingsAware):
         elif string in ALLOWED_VALUES:
             current = self.settings[string]
             allowed = ALLOWED_VALUES[string]
-            if len(allowed) > 0:
+            if allowed:
                 if current not in allowed and current == "":
                     current = allowed[0]
                 if current in allowed:
@@ -626,7 +672,8 @@ class Actions(FileManagerAware, SettingsAware):
         if func is not None:
             self.settings['sort'] = str(func)
 
-    def mark_files(self, all=False, toggle=False, val=None, movedown=None, narg=None):
+    def mark_files(self, all=False,  # pylint: disable=redefined-builtin,too-many-arguments
+                   toggle=False, val=None, movedown=None, narg=None):
         """A wrapper for the directory.mark_xyz functions.
 
         Arguments:
@@ -680,7 +727,7 @@ class Actions(FileManagerAware, SettingsAware):
         cwd = self.thisdir
         direction = Direction(dirarg)
         pos, selected = direction.select(lst=cwd.files, current=cwd.pointer,
-                pagesize=self.ui.termsize[0])
+                                         pagesize=self.ui.termsize[0])
         cwd.pointer = pos
         cwd.correct_pointer()
         for item in selected:
@@ -693,8 +740,8 @@ class Actions(FileManagerAware, SettingsAware):
     def search_file(self, text, offset=1, regexp=True):
         if isinstance(text, str) and regexp:
             try:
-                text = re.compile(text, re.L | re.U | re.I)
-            except Exception:
+                text = re.compile(text, re.UNICODE | re.IGNORECASE)  # pylint: disable=no-member
+            except re.error:
                 return False
         self.thistab.last_search = text
         self.search_next(order='search', offset=offset)
@@ -713,11 +760,14 @@ class Actions(FileManagerAware, SettingsAware):
                 if arg is None:
                     return False
                 if hasattr(arg, 'search'):
-                    fnc = lambda x: arg.search(x.basename)
+                    def fnc(obj):
+                        return arg.search(obj.basename)
                 else:
-                    fnc = lambda x: arg in x.basename
+                    def fnc(obj):
+                        return arg in obj.basename
             elif order == 'tag':
-                fnc = lambda x: x.realpath in self.tags
+                def fnc(obj):
+                    return obj.realpath in self.tags
 
             return self.thisdir.search_fnc(fnc=fnc, offset=offset, forward=forward)
 
@@ -726,24 +776,28 @@ class Actions(FileManagerAware, SettingsAware):
             if original_order is not None or not cwd.cycle_list:
                 lst = list(cwd.files)
                 if order == 'size':
-                    fnc = lambda item: -item.size
+                    def fnc(item):
+                        return -item.size
                 elif order == 'mimetype':
-                    fnc = lambda item: item.mimetype or ''
+                    def fnc(item):
+                        return item.mimetype or ''
                 elif order == 'ctime':
-                    fnc = lambda item: -int(item.stat and item.stat.st_ctime)
+                    def fnc(item):
+                        return -int(item.stat and item.stat.st_ctime)
                 elif order == 'atime':
-                    fnc = lambda item: -int(item.stat and item.stat.st_atime)
+                    def fnc(item):
+                        return -int(item.stat and item.stat.st_atime)
                 elif order == 'mtime':
-                    fnc = lambda item: -int(item.stat and item.stat.st_mtime)
+                    def fnc(item):
+                        return -int(item.stat and item.stat.st_mtime)
                 lst.sort(key=fnc)
                 cwd.set_cycle_list(lst)
                 return cwd.cycle(forward=None)
 
             return cwd.cycle(forward=forward)
 
-    def set_search_method(self, order, forward=True):
-        if order in ('search', 'tag', 'size', 'mimetype', 'ctime',
-                'mtime', 'atime'):
+    def set_search_method(self, order, forward=True):  # pylint: disable=unused-argument
+        if order in ('search', 'tag', 'size', 'mimetype', 'ctime', 'mtime', 'atime'):
             self.search_method = order
 
     # --------------------------
@@ -823,15 +877,14 @@ class Actions(FileManagerAware, SettingsAware):
     def draw_possible_programs(self):
         try:
             target = self.thistab.get_selection()[0]
-        except Exception:
+        except IndexError:
             self.ui.browser.draw_info = []
             return
-        programs = [program for program in self.rifle.list_commands([target.path],
-                None)]
+        programs = [program for program in self.rifle.list_commands([target.path], None)]
         if programs:
             num_digits = max((len(str(program[0])) for program in programs))
-            program_info = ['%s | %s' % (str(program[0]).rjust(num_digits),
-                    program[1]) for program in programs]
+            program_info = ['%s | %s' % (str(program[0]).rjust(num_digits), program[1])
+                            for program in programs]
             self.ui.browser.draw_info = program_info
 
     def hide_console_info(self):
@@ -844,8 +897,8 @@ class Actions(FileManagerAware, SettingsAware):
 
     def display_command_help(self, console_widget):
         try:
-            command = console_widget._get_cmd_class()
-        except Exception:
+            command = console_widget.get_cmd_class()
+        except KeyError:
             self.notify("Feature not available!", bad=True)
             return
 
@@ -854,8 +907,7 @@ class Actions(FileManagerAware, SettingsAware):
             return
 
         if not command.__doc__:
-            self.notify("Command has no docstring. Try using python without -OO",
-                    bad=True)
+            self.notify("Command has no docstring. Try using python without -OO", bad=True)
             return
 
         pager = self.ui.open_pager()
@@ -886,11 +938,11 @@ class Actions(FileManagerAware, SettingsAware):
             return
 
         pager = self.ui.open_pager()
-        f = self.thisfile.get_preview_source(pager.wid, pager.hei)
+        fobj = self.thisfile.get_preview_source(pager.wid, pager.hei)
         if self.thisfile.is_image_preview():
-            pager.set_image(f)
+            pager.set_image(fobj)
         else:
-            pager.set_source(f)
+            pager.set_source(fobj)
 
     # --------------------------
     # -- Previews
@@ -898,143 +950,157 @@ class Actions(FileManagerAware, SettingsAware):
     def update_preview(self, path):
         try:
             del self.previews[path]
-            self.ui.need_redraw = True
-        except Exception:
+        except KeyError:
             return False
+        self.ui.need_redraw = True
+        return True
 
-    if version_info[0] == 3:
-        def sha1_encode(self, path):
-            return os.path.join(ranger.arg.cachedir,
-                    sha1(path.encode('utf-8', 'backslashreplace'))
-                            .hexdigest()) + '.jpg'
-    else:
-        def sha1_encode(self, path):
-            return os.path.join(ranger.arg.cachedir,
-                    sha1(path).hexdigest()) + '.jpg'
+    @staticmethod
+    def sha1_encode(path):
+        if version_info[0] < 3:
+            return os.path.join(ranger.args.cachedir, sha1(path).hexdigest()) + '.jpg'
+        return os.path.join(ranger.args.cachedir,
+                            sha1(path.encode('utf-8', 'backslashreplace')).hexdigest()) + '.jpg'
 
-    def get_preview(self, file, width, height):
+    def get_preview(self, fobj, width, height):  # pylint: disable=too-many-return-statements
         pager = self.ui.get_pager()
-        path = file.realpath
+        path = fobj.realpath
 
         if not path or not os.path.exists(path):
             return None
 
-        if self.settings.preview_script and self.settings.use_preview_script:
-            # self.previews is a 2 dimensional dict:
-            # self.previews['/tmp/foo.jpg'][(80, 24)] = "the content..."
-            # self.previews['/tmp/foo.jpg']['loading'] = False
-            # A -1 in tuples means "any"; (80, -1) = wid. of 80 and any hei.
-            # The key 'foundpreview' is added later. Values in (True, False)
-            # XXX: Previews can break when collapse_preview is on and the
-            # preview column is popping out as you move the cursor on e.g. a
-            # PDF file.
-            try:
-                data = self.previews[path]
-            except Exception:
-                data = self.previews[path] = {'loading': False}
-            else:
-                if data['loading']:
-                    return None
-
-            found = data.get((-1, -1), data.get((width, -1),
-                data.get((-1, height), data.get((width, height), False))))
-            if found is False:
-                try:
-                    stat_ = os.stat(self.settings.preview_script)
-                except Exception:
-                    self.fm.notify("Preview Script `%s' doesn't exist!" %
-                            self.settings.preview_script, bad=True)
-                    return None
-
-                if not stat_.st_mode & S_IEXEC:
-                    self.fm.notify("Preview Script `%s' is not executable!" %
-                            self.settings.preview_script, bad=True)
-                    return None
-
-                data['loading'] = True
-
-                if 'directimagepreview' in data:
-                    data['foundpreview'] = True
-                    data['imagepreview'] = True
-                    pager.set_image(path)
-                    data['loading'] = False
-                    return path
-
-                cacheimg = os.path.join(ranger.arg.cachedir, self.sha1_encode(path))
-                if (os.path.isfile(cacheimg) and os.path.getmtime(cacheimg) > os.path.getmtime(path)):
-                    data['foundpreview'] = True
-                    data['imagepreview'] = True
-                    pager.set_image(cacheimg)
-                    data['loading'] = False
-                    return cacheimg
-
-                loadable = CommandLoader(args=[self.settings.preview_script,
-                    path, str(width), str(height), cacheimg,
-                    str(self.settings.preview_images)], read=True,
-                    silent=True, descr="Getting preview of %s" % path)
-
-                def on_after(signal):
-                    exit = signal.process.poll()
-                    content = signal.loader.stdout_buffer
-                    data['foundpreview'] = True
-                    if exit == 0:
-                        data[(width, height)] = content
-                    elif exit == 3:
-                        data[(-1, height)] = content
-                    elif exit == 4:
-                        data[(width, -1)] = content
-                    elif exit == 5:
-                        data[(-1, -1)] = content
-                    elif exit == 6:
-                        data['imagepreview'] = True
-                    elif exit == 7:
-                        data['directimagepreview'] = True
-                    elif exit == 1:
-                        data[(-1, -1)] = None
-                        data['foundpreview'] = False
-                    elif exit == 2:
-                        f = codecs.open(path, 'r', errors='ignore')
-                        try:
-                            data[(-1, -1)] = f.read(1024 * 32)
-                        except UnicodeDecodeError:
-                            f.close()
-                            f = codecs.open(path, 'r', encoding='latin-1',
-                                    errors='ignore')
-                            data[(-1, -1)] = f.read(1024 * 32)
-                        f.close()
-                    else:
-                        data[(-1, -1)] = None
-                    if self.thisfile and self.thisfile.realpath == path:
-                        self.ui.browser.need_redraw = True
-                    data['loading'] = False
-                    pager = self.ui.get_pager()
-                    if self.thisfile and self.thisfile.is_file:
-                        if 'imagepreview' in data:
-                            pager.set_image(cacheimg)
-                            return cacheimg
-                        elif 'directimagepreview' in data:
-                            pager.set_image(path)
-                            return path
-                        else:
-                            pager.set_source(self.thisfile.get_preview_source(
-                                pager.wid, pager.hei))
-
-                def on_destroy(signal):
-                    try:
-                        del self.previews[path]
-                    except Exception:
-                        pass
-                loadable.signal_bind('after', on_after)
-                loadable.signal_bind('destroy', on_destroy)
-                self.loader.add(loadable)
-                return None
-            else:
-                return found
-        else:
+        if not self.settings.preview_script or not self.settings.use_preview_script:
             try:
                 return codecs.open(path, 'r', errors='ignore')
-            except Exception:
+            except OSError:
                 return None
+
+        # self.previews is a 2 dimensional dict:
+        # self.previews['/tmp/foo.jpg'][(80, 24)] = "the content..."
+        # self.previews['/tmp/foo.jpg']['loading'] = False
+        # A -1 in tuples means "any"; (80, -1) = wid. of 80 and any hei.
+        # The key 'foundpreview' is added later. Values in (True, False)
+        # XXX: Previews can break when collapse_preview is on and the
+        # preview column is popping out as you move the cursor on e.g. a
+        # PDF file.
+        try:
+            data = self.previews[path]
+        except KeyError:
+            data = self.previews[path] = {'loading': False}
+        else:
+            if data['loading']:
+                return None
+
+        found = data.get(
+            (-1, -1), data.get(
+                (width, -1), data.get(
+                    (-1, height), data.get(
+                        (width, height), False
+                    )
+                )
+            )
+        )
+        if found is not False:
+            return found
+
+        try:
+            stat_ = os.stat(self.settings.preview_script)
+        except OSError:
+            self.fm.notify("Preview script `{0}` doesn't exist!".format(
+                self.settings.preview_script), bad=True)
+            return None
+
+        if not stat_.st_mode & S_IEXEC:
+            self.fm.notify("Preview script `{0}` is not executable!".format(
+                self.settings.preview_script), bad=True)
+            return None
+
+        data['loading'] = True
+
+        if 'directimagepreview' in data:
+            data['foundpreview'] = True
+            data['imagepreview'] = True
+            pager.set_image(path)
+            data['loading'] = False
+            return path
+
+        cacheimg = os.path.join(ranger.args.cachedir, self.sha1_encode(path))
+        if self.settings.preview_images and \
+                os.path.isfile(cacheimg) and \
+                os.path.getmtime(cacheimg) > os.path.getmtime(path):
+            data['foundpreview'] = True
+            data['imagepreview'] = True
+            pager.set_image(cacheimg)
+            data['loading'] = False
+            return cacheimg
+
+        def on_after(signal):
+            rcode = signal.process.poll()
+            content = signal.loader.stdout_buffer
+            data['foundpreview'] = True
+
+            if rcode == 0:
+                data[(width, height)] = content
+            elif rcode == 3:
+                data[(-1, height)] = content
+            elif rcode == 4:
+                data[(width, -1)] = content
+            elif rcode == 5:
+                data[(-1, -1)] = content
+            elif rcode == 6:
+                data['imagepreview'] = True
+            elif rcode == 7:
+                data['directimagepreview'] = True
+            elif rcode == 1:
+                data[(-1, -1)] = None
+                data['foundpreview'] = False
+            elif rcode == 2:
+                fobj = codecs.open(path, 'r', errors='ignore')
+                try:
+                    data[(-1, -1)] = fobj.read(1024 * 32)
+                except UnicodeDecodeError:
+                    fobj.close()
+                    fobj = codecs.open(path, 'r', encoding='latin-1', errors='ignore')
+                    data[(-1, -1)] = fobj.read(1024 * 32)
+                fobj.close()
+            else:
+                data[(-1, -1)] = None
+
+            if self.thisfile and self.thisfile.realpath == path:
+                self.ui.browser.need_redraw = True
+
+            data['loading'] = False
+
+            pager = self.ui.get_pager()
+            if self.thisfile and self.thisfile.is_file:
+                if 'imagepreview' in data:
+                    pager.set_image(cacheimg)
+                    return cacheimg
+                elif 'directimagepreview' in data:
+                    pager.set_image(path)
+                    return path
+                else:
+                    pager.set_source(self.thisfile.get_preview_source(
+                        pager.wid, pager.hei))
+
+        def on_destroy(signal):  # pylint: disable=unused-argument
+            try:
+                del self.previews[path]
+            except KeyError:
+                pass
+
+        loadable = CommandLoader(
+            args=[self.settings.preview_script, path, str(width), str(height),
+                  cacheimg, str(self.settings.preview_images)],
+            read=True,
+            silent=True,
+            descr="Getting preview of %s" % path,
+        )
+        loadable.signal_bind('after', on_after)
+        loadable.signal_bind('destroy', on_destroy)
+        self.loader.add(loadable)
+
+        return None
 
     # --------------------------
     # -- Tabs
@@ -1072,7 +1138,7 @@ class Actions(FileManagerAware, SettingsAware):
             name = self.current_tab
         tab = self.tabs[name]
         if name == self.current_tab:
-            direction = -1 if name == self._get_tab_list()[-1] else 1
+            direction = -1 if name == self.get_tab_list()[-1] else 1
             previous = self.current_tab
             self.tab_move(direction)
             if previous == self.current_tab:
@@ -1094,15 +1160,14 @@ class Actions(FileManagerAware, SettingsAware):
                     tab.enter_dir(tab.path, history=False)
                     self.thistab = tab
                     self.change_mode('normal')
-                    self.signal_emit('tab.change', old=previous_tab,
-                            new=self.thistab)
+                    self.signal_emit('tab.change', old=previous_tab, new=self.thistab)
                     break
 
     def tab_move(self, offset, narg=None):
         if narg:
             return self.tab_open(narg)
         assert isinstance(offset, int)
-        tablist = self._get_tab_list()
+        tablist = self.get_tab_list()
         current_index = tablist.index(self.current_tab)
         newtab = tablist[(current_index + offset) % len(tablist)]
         if newtab != self.current_tab:
@@ -1125,7 +1190,8 @@ class Actions(FileManagerAware, SettingsAware):
             file_selection = None
             if create_directory:
                 try:
-                    os.makedirs(path, exist_ok=True)
+                    if not os.path.isdir(path):
+                        os.makedirs(path)
                 except OSError as err:
                     self.fm.notify(err, bad=True)
                     return
@@ -1158,13 +1224,16 @@ class Actions(FileManagerAware, SettingsAware):
         if file_selection:
             self.fm.select_file(file_selection)
 
-    def _get_tab_list(self):
-        assert len(self.tabs) > 0, "There must be >=1 tabs at all times"
+    def get_tab_list(self):
+        assert self.tabs, "There must be at least 1 tab at all times"
         return sorted(self.tabs)
 
     # --------------------------
     # -- Overview of internals
     # --------------------------
+
+    def _run_pager(self, path):
+        self.run(shlex.split(os.environ.get('PAGER', ranger.DEFAULT_PAGER)) + [path])
 
     def dump_keybindings(self, *contexts):
         if not contexts:
@@ -1172,7 +1241,7 @@ class Actions(FileManagerAware, SettingsAware):
 
         temporary_file = tempfile.NamedTemporaryFile()
 
-        def write(string):
+        def write(string):  # pylint: disable=redefined-outer-name
             temporary_file.write(string.encode('utf-8'))
 
         def recurse(before, pointer):
@@ -1192,13 +1261,12 @@ class Actions(FileManagerAware, SettingsAware):
             write("\n")
 
         temporary_file.flush()
-        pager = os.environ.get('PAGER', ranger.DEFAULT_PAGER)
-        self.run([pager, temporary_file.name])
+        self._run_pager(temporary_file.name)
 
     def dump_commands(self):
         temporary_file = tempfile.NamedTemporaryFile()
 
-        def write(string):
+        def write(string):  # pylint: disable=redefined-outer-name
             temporary_file.write(string.encode('utf-8'))
 
         undocumented = []
@@ -1218,21 +1286,19 @@ class Actions(FileManagerAware, SettingsAware):
                 write("    :%s\n" % cmd.get_name())
 
         temporary_file.flush()
-        pager = os.environ.get('PAGER', ranger.DEFAULT_PAGER)
-        self.run([pager, temporary_file.name])
+        self._run_pager(temporary_file.name)
 
     def dump_settings(self):
         temporary_file = tempfile.NamedTemporaryFile()
 
-        def write(string):
+        def write(string):  # pylint: disable=redefined-outer-name
             temporary_file.write(string.encode('utf-8'))
 
         for setting in sorted(ALLOWED_SETTINGS):
             write("%30s = %s\n" % (setting, getattr(self.settings, setting)))
 
         temporary_file.flush()
-        pager = os.environ.get('PAGER', ranger.DEFAULT_PAGER)
-        self.run([pager, temporary_file.name])
+        self._run_pager(temporary_file.name)
 
     # --------------------------
     # -- File System Operations
@@ -1256,7 +1322,7 @@ class Actions(FileManagerAware, SettingsAware):
         assert mode in ('set', 'add', 'remove', 'toggle')
         cwd = self.thisdir
         if not narg and not dirarg:
-            selected = (f for f in self.thistab.get_selection() if f in cwd.files)
+            selected = (fobj for fobj in self.thistab.get_selection() if fobj in cwd.files)
         else:
             if not dirarg and narg:
                 direction = Direction(down=1)
@@ -1264,9 +1330,8 @@ class Actions(FileManagerAware, SettingsAware):
             else:
                 direction = Direction(dirarg)
                 offset = 1
-            pos, selected = direction.select(
-                    override=narg, lst=cwd.files, current=cwd.pointer,
-                    pagesize=self.ui.termsize[0], offset=offset)
+            pos, selected = direction.select(override=narg, lst=cwd.files, current=cwd.pointer,
+                                             pagesize=self.ui.termsize[0], offset=offset)
             cwd.pointer = pos
             cwd.correct_pointer()
         if mode == 'set':
@@ -1292,32 +1357,35 @@ class Actions(FileManagerAware, SettingsAware):
 
     def paste_symlink(self, relative=False):
         copied_files = self.copy_buffer
-        for f in copied_files:
-            self.notify(next_available_filename(f.basename))
+        for fobj in copied_files:
+            new_name = next_available_filename(fobj.basename)
+            self.notify(new_name)
             try:
-                new_name = next_available_filename(f.basename)
                 if relative:
-                    relative_symlink(f.path, join(getcwd(), new_name))
+                    relative_symlink(fobj.path, join(getcwd(), new_name))
                 else:
-                    symlink(f.path, join(getcwd(), new_name))
-            except Exception as x:
-                self.notify(x)
+                    symlink(fobj.path, join(getcwd(), new_name))
+            except OSError as ex:
+                self.notify('Failed to paste symlink: View log for more info',
+                            bad=True, exception=ex)
 
     def paste_hardlink(self):
-        for f in self.copy_buffer:
+        for fobj in self.copy_buffer:
+            new_name = next_available_filename(fobj.basename)
             try:
-                new_name = next_available_filename(f.basename)
-                link(f.path, join(getcwd(), new_name))
-            except Exception as x:
-                self.notify(x)
+                link(fobj.path, join(getcwd(), new_name))
+            except OSError as ex:
+                self.notify('Failed to paste hardlink: View log for more info',
+                            bad=True, exception=ex)
 
     def paste_hardlinked_subtree(self):
-        for f in self.copy_buffer:
+        for fobj in self.copy_buffer:
             try:
-                target_path = join(getcwd(), f.basename)
-                self._recurse_hardlinked_tree(f.path, target_path)
-            except Exception as x:
-                self.notify(x)
+                target_path = join(getcwd(), fobj.basename)
+                self._recurse_hardlinked_tree(fobj.path, target_path)
+            except OSError as ex:
+                self.notify('Failed to paste hardlinked subtree: View log for more info',
+                            bad=True, exception=ex)
 
     def _recurse_hardlinked_tree(self, source_path, target_path):
         if isdir(source_path):
@@ -1329,9 +1397,9 @@ class Actions(FileManagerAware, SettingsAware):
                     join(target_path, item))
         else:
             if not exists(target_path) \
-            or stat(source_path).st_ino != stat(target_path).st_ino:
+                    or stat(source_path).st_ino != stat(target_path).st_ino:
                 link(source_path,
-                    next_available_filename(target_path))
+                     next_available_filename(target_path))
 
     def paste(self, overwrite=False, append=False):
         """:paste
@@ -1347,23 +1415,23 @@ class Actions(FileManagerAware, SettingsAware):
         self.notify("Deleting!")
         # COMPAT: old command.py use fm.delete() without arguments
         if files is None:
-            files = (f.path for f in self.thistab.get_selection())
-        files = [os.path.abspath(f) for f in files]
-        for f in files:
+            files = (fobj.path for fobj in self.thistab.get_selection())
+        files = [os.path.abspath(path) for path in files]
+        for path in files:
             # Untag the deleted files.
             for tag in self.fm.tags.tags:
-                if str(tag).startswith(f):
+                if str(tag).startswith(path):
                     self.fm.tags.remove(tag)
-        self.copy_buffer = set(filter(lambda f: f.path not in files, self.copy_buffer))
-        for f in files:
-            if isdir(f) and not os.path.islink(f):
+        self.copy_buffer = set(fobj for fobj in self.copy_buffer if fobj.path not in files)
+        for path in files:
+            if isdir(path) and not os.path.islink(path):
                 try:
-                    shutil.rmtree(f)
+                    shutil.rmtree(path)
                 except OSError as err:
                     self.notify(err)
             else:
                 try:
-                    os.remove(f)
+                    os.remove(path)
                 except OSError as err:
                     self.notify(err)
         self.thistab.ensure_correct_pointer()

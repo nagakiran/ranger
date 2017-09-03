@@ -4,12 +4,19 @@
 
 """A library to help to convert ANSI codes to curses instructions."""
 
-from ranger.gui import color
+from __future__ import (absolute_import, division, print_function)
+
 import re
 
+from ranger.ext.widestring import WideString
+from ranger.gui import color
+
+
+# pylint: disable=invalid-name
 ansi_re = re.compile('(\x1b' + r'\[\d*(?:;\d+)*?[a-zA-Z])')
 codesplit_re = re.compile(r'38;5;(\d+);|48;5;(\d+);|(\d*);')
 reset = '\x1b[0m'
+# pylint: enable=invalid-name
 
 
 def split_ansi_from_text(ansi_text):
@@ -19,7 +26,7 @@ def split_ansi_from_text(ansi_text):
 # githttp://en.wikipedia.org/wiki/ANSI_escape_code
 
 
-def text_with_fg_bg_attr(ansi_text):
+def text_with_fg_bg_attr(ansi_text):  # pylint: disable=too-many-branches,too-many-statements
     fg, bg, attr = -1, -1, 0
     for chunk in split_ansi_from_text(ansi_text):
         if chunk and chunk[0] == '\x1b':
@@ -35,17 +42,17 @@ def text_with_fg_bg_attr(ansi_text):
             for x256fg, x256bg, arg in codesplit_re.findall(attr_args + ';'):
                 # first handle xterm256 codes
                 try:
-                    if len(x256fg) > 0:           # xterm256 foreground
+                    if x256fg:                    # xterm256 foreground
                         fg = int(x256fg)
                         continue
-                    elif len(x256bg) > 0:         # xterm256 background
+                    elif x256bg:                  # xterm256 background
                         bg = int(x256bg)
                         continue
-                    elif len(arg) > 0:            # usual ansi code
+                    elif arg:                     # usual ansi code
                         n = int(arg)
                     else:                         # empty code means reset
                         n = 0
-                except Exception:
+                except ValueError:
                     continue
 
                 if n == 0:                        # reset colors and attributes
@@ -82,7 +89,8 @@ def text_with_fg_bg_attr(ansi_text):
                 elif n == 49:
                     bg = -1
 
-                elif n >= 90 and n <= 97:         # 8 aixterm high intensity colors (light but not bold)
+                # 8 aixterm high intensity colors (light but not bold)
+                elif n >= 90 and n <= 97:
                     fg = n - 90 + 8
                 elif n == 99:
                     fg = -1
@@ -111,7 +119,7 @@ def char_len(ansi_text):
     >>> char_len("")
     0
     """
-    return len(ansi_re.sub('', ansi_text))
+    return len(WideString(ansi_re.sub('', ansi_text)))
 
 
 def char_slice(ansi_text, start, length):
@@ -146,22 +154,24 @@ def char_slice(ansi_text, start, length):
             last_color = chunk
             continue
 
+        chunk = WideString(chunk)
         old_pos = pos
         pos += len(chunk)
         if pos <= start:
             pass  # seek
         elif old_pos < start and pos >= start:
             chunks.append(last_color)
-            chunks.append(chunk[start - old_pos:start - old_pos + length])
+            chunks.append(str(chunk[start - old_pos:start - old_pos + length]))
         elif pos > length + start:
             chunks.append(last_color)
-            chunks.append(chunk[:start - old_pos + length])
+            chunks.append(str(chunk[:start - old_pos + length]))
         else:
             chunks.append(last_color)
-            chunks.append(chunk)
+            chunks.append(str(chunk))
         if pos - start >= length:
             break
     return ''.join(chunks)
+
 
 if __name__ == '__main__':
     import doctest

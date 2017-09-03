@@ -129,7 +129,7 @@
 .\" ========================================================================
 .\"
 .IX Title "RANGER 1"
-.TH RANGER 1 "ranger-1.8.1" "01/08/2017" "ranger manual"
+.TH RANGER 1 "ranger-1.9.0b5" "07/16/2017" "ranger manual"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -139,9 +139,11 @@ ranger \- visual file manager
 .SH "SYNOPSIS"
 .IX Header "SYNOPSIS"
 \&\fBranger\fR [\fB\-\-version\fR] [\fB\-\-help\fR] [\fB\-\-debug\fR] [\fB\-\-clean\fR]
-[\fB\-\-confdir\fR=\fIdirectory\fR] [\fB\-\-copy\-config\fR=\fIwhich\fR]
+[\fB\-\-cachedir\fR=\fIdirectory\fR] [\fB\-\-confdir\fR=\fIdirectory\fR] [\fB\-\-datadir\fR=\fIdirectory\fR]
+[\fB\-\-copy\-config\fR=\fIwhich\fR]
 [\fB\-\-choosefile\fR=\fItarget\fR] [\fB\-\-choosefiles\fR=\fItarget\fR]
 [\fB\-\-choosedir\fR=\fItarget\fR] [\fB\-\-selectfile\fR=\fIfilepath\fR]
+[\fB\-\-show\-only\-dirs\fR]
 [\fB\-\-list\-unused\-keys\fR] [\fB\-\-list\-tagged\-files\fR=\fItag\fR]
 [\fB\-\-profile\fR] [\fB\-\-cmd\fR=\fIcommand\fR] [\fIpath\fR]
 .SH "DESCRIPTION"
@@ -182,9 +184,15 @@ exception in the statusbar/log and try to keep running.
 Activate the clean mode:  ranger will not access or create any configuration
 files nor will it leave any traces on your system.  This is useful when your
 configuration is broken, when you want to avoid clutter, etc.
+.IP "\fB\-\-cachedir\fR=\fIdir\fR" 14
+.IX Item "--cachedir=dir"
+Change the cache directory of ranger from \f(CW$XDG_CACHE_HOME\fR or ~/.cache/ranger to \*(L"dir\*(R".
 .IP "\fB\-r\fR \fIdir\fR, \fB\-\-confdir\fR=\fIdir\fR" 14
 .IX Item "-r dir, --confdir=dir"
-Change the configuration directory of ranger from ~/.config/ranger to \*(L"dir\*(R".
+Change the configuration directory of ranger from \f(CW$XDG_CONFIG_HOME\fR or ~/.config/ranger to \*(L"dir\*(R".
+.IP "\fB\-\-datadir\fR=\fIdir\fR" 14
+.IX Item "--datadir=dir"
+Change the data directory of ranger from \f(CW$XDG_DATA_HOME\fR or ~/.local/share/ranger to \*(L"dir\*(R".
 .IP "\fB\-\-copy\-config\fR=\fIfile\fR" 14
 .IX Item "--copy-config=file"
 Create copies of the default configuration files in your local configuration
@@ -218,6 +226,10 @@ write the last visited directory into \fItargetfile\fR.
 .IP "\fB\-\-selectfile\fR=\fItargetfile\fR" 14
 .IX Item "--selectfile=targetfile"
 Open ranger with \fItargetfile\fR selected.
+.IP "\fB\-\-show\-only\-dirs\fR" 14
+.IX Item "--show-only-dirs"
+Display only the directories. May be used in conjunction with
+\&\fB\-\-choosedir\fR=\fItargetfile\fR.
 .IP "\fB\-\-list\-unused\-keys\fR" 14
 .IX Item "--list-unused-keys"
 List common keys which are not bound to any action in the \*(L"browser\*(R" context.
@@ -348,6 +360,8 @@ can use it for something like this command:
 .PP
 \&\f(CW%confdir\fR expands to the directory given by \fB\-\-confdir\fR.
 .PP
+\&\f(CW%datadir\fR expands to the directory given by \fB\-\-datadir\fR.
+.PP
 The macro \f(CW%space\fR expands to a space character. You can use it to add spaces to
 the end of a command when needed, while preventing editors to strip spaces off
 the end of the line automatically.
@@ -475,6 +489,13 @@ Move up and down in the parent directory.
 .IP "^R" 14
 .IX Item "^R"
 Reload everything
+.IP "F" 14
+.IX Item "F"
+Toggle \fIfreeze_files\fR setting.  When active (indicated by a cyan \fI\s-1FROZEN\s0\fR
+message in the status bar), directories and files will not be loaded, improving
+performance when all the files you need are already loaded.  This does not
+affect file previews, which can be toggled with \fIzI\fR.  Also try disabling the
+preview of directories with \fIzP\fR.
 .IP "^L" 14
 .IX Item "^L"
 Redraw the screen
@@ -695,6 +716,21 @@ though by turning on this option.
 .IX Item "cd_bookmarks [bool]"
 Specify whether bookmarks should be included in the tab completion of the \*(L"cd\*(R"
 command.
+.IP "cd_tab_case [string]" 4
+.IX Item "cd_tab_case [string]"
+Changes case sensitivity for the \*(L"cd\*(R" command tab completion. Possible values are:
+.Sp
+.Vb 3
+\& sensitive
+\& insensitive
+\& smart
+.Ve
+.IP "cd_tab_smart [bool]" 4
+.IX Item "cd_tab_smart [bool]"
+Use smart tab completion with less typing? E.g. \*(L":cd /f/b/b<tab>\*(R" yields \*(L":cd /foo/bar/baz\*(R".
+.IP "clear_filters_on_dir_change [bool]" 4
+.IX Item "clear_filters_on_dir_change [bool]"
+If set to 'true', persistent filters would be cleared upon leaving the directory
 .IP "collapse_preview [bool] <zc>" 4
 .IX Item "collapse_preview [bool] <zc>"
 When no preview is visible, should the last column be squeezed to make use of
@@ -738,6 +774,11 @@ currently running tasks which support progress bars?
 Flush the input after each key hit?  One advantage is that when scrolling down
 with \*(L"j\*(R", ranger stops scrolling instantly when you release the key.  One
 disadvantage is that when you type commands blindly, some keys might get lost.
+.IP "freeze_files [bool] <F>" 4
+.IX Item "freeze_files [bool] <F>"
+When active, directories and files will not be loaded, improving performance
+when all the files you need are already loaded.  This does not affect file
+previews.
 .IP "hidden_filter [string]" 4
 .IX Item "hidden_filter [string]"
 A regular expression pattern for files which should be hidden.  For example,
@@ -802,6 +843,11 @@ the content.
 .IX Item "save_console_history [bool]"
 Should the console history be saved on exit?  If disabled, the console history
 is reset when you restart ranger.
+.IP "save_tabs_on_exit [bool]" 4
+.IX Item "save_tabs_on_exit [bool]"
+Save all tabs, except the active, on exit? The last saved tabs are restored once
+when starting the next session. Multiple sessions are stored in a stack and the
+oldest saved tabs are restored first.
 .IP "scroll_offset [integer]" 4
 .IX Item "scroll_offset [integer]"
 Try to keep this much space between the top/bottom border when scrolling.
@@ -842,9 +888,12 @@ combination, e.g. \*(L"oN\*(R" to sort from Z to A.
 .IP "status_bar_on_top [bool]" 4
 .IX Item "status_bar_on_top [bool]"
 Put the status bar at the top of the window?
+.IP "hostname_in_titlebar [bool]" 4
+.IX Item "hostname_in_titlebar [bool]"
+Show hostname in titlebar?
 .IP "tilde_in_titlebar [bool]" 4
 .IX Item "tilde_in_titlebar [bool]"
-Abbreviate \f(CW$HOME\fR with ~ in the title bar (first line) of ranger?
+Abbreviate \f(CW$HOME\fR with ~ in the titlebar (first line) of ranger?
 .IP "unicode_ellipsis [bool]" 4
 .IX Item "unicode_ellipsis [bool]"
 Use a unicode \*(L"...\*(R" character instead of \*(L"~\*(R" to mark cut-off filenames?
@@ -869,13 +918,14 @@ Sets the state for the version control backend. The possible values are:
 \& local      display only local state.
 \& enabled    display both, local and remote state. May be slow for hg and bzr.
 .Ve
+.IP "wrap_scroll [bool]" 4
+.IX Item "wrap_scroll [bool]"
+Enable scroll wrapping \- moving down while on the last item will wrap around to
+the top and vice versa.
 .IP "xterm_alt_key [bool]" 4
 .IX Item "xterm_alt_key [bool]"
 Enable this if key combinations with the Alt Key don't work for you.
 (Especially on xterm)
-.IP "clear_filters_on_dir_change [bool]" 4
-.IX Item "clear_filters_on_dir_change [bool]"
-If set to 'true', persistent filters would be cleared upon leaving the directory
 .SH "COMMANDS"
 .IX Header "COMMANDS"
 You can enter the commands in the console which is opened by pressing \*(L":\*(R".
@@ -907,6 +957,7 @@ ranger.  For your convenience, this is a list of the \*(L"public\*(R" commands i
 \& flat level
 \& grep pattern
 \& help
+\& jump_non [\-FLAGS...]
 \& linemode linemodename
 \& load_copy_buffer
 \& map key command
@@ -920,17 +971,19 @@ ranger.  For your convenience, this is a list of the \*(L"public\*(R" commands i
 \& punmap keys...
 \& quit
 \& quit!
+\& quitall
+\& quitall!
 \& relink newpath
-\& rename_append
+\& rename_append [\-FLAGS...]
 \& rename newname
 \& save_copy_buffer
-\& scout [\-FLAGS] pattern
+\& scout [\-FLAGS...] pattern
 \& search pattern
 \& search_inc pattern
 \& set option value
 \& setintag tags option value
 \& setlocal [path=<path>] option value
-\& shell [\-FLAGS] command
+\& shell [\-FLAGS...] command
 \& source filename
 \& terminal
 \& tmap key command
@@ -1072,6 +1125,13 @@ Looks for a string in all marked files or directories.
 .IP "help" 2
 .IX Item "help"
 Provides a quick way to view ranger documentations.
+.IP "jump_non [\-\fIflags\fR...]" 2
+.IX Item "jump_non [-flags...]"
+Jumps to first non-directory if highlighted file is a directory and vice versa.
+.Sp
+Flags:
+ \-r    Jump in reverse order
+ \-w    Wrap around if reaching end of filelist
 .IP "linemode \fIlinemodename\fR" 2
 .IX Item "linemode linemodename"
 Sets the linemode of all files in the current directory.  The linemode may be:
@@ -1146,23 +1206,34 @@ a row.
 Removes key mappings of the pager. Works like the \f(CW\*(C`unmap\*(C'\fR command.
 .IP "quit" 2
 .IX Item "quit"
-Like quit!, but closes only this tab if multiple tabs are open.
+Closes the current tab, if there's only one tab. Otherwise quits if there are no tasks in progress.
+The current directory will be bookmarked as ' so you can re-enter it by typing `` or '' the next time you
+start ranger.
 .IP "quit!" 2
 .IX Item "quit!"
-Quit ranger.  The current directory will be bookmarked as ' so you can re-enter
-it by typing `` or '' the next time you start ranger.
+Like \f(CW\*(C`quit\*(C'\fR, except will force quit even if tasks are in progress.
+.IP "quitall" 2
+.IX Item "quitall"
+Like \f(CW\*(C`quit\*(C'\fR, except will quit even if multiple tabs are open.
+.IP "quitall!" 2
+.IX Item "quitall!"
+Like \f(CW\*(C`quitall\*(C'\fR, except will force quit even if tasks are in progress.
 .IP "relink \fInewpath\fR" 2
 .IX Item "relink newpath"
 Change the link destination of the current symlink file to <newpath>. First
 <tab> will load the original link.
-.IP "rename_append" 2
-.IX Item "rename_append"
-Opens the console with \*(L":rename <current file>\*(R" with the cursor automatically
-placed before the file extension
 .IP "rename \fInewname\fR" 2
 .IX Item "rename newname"
 Rename the current file.  If a file with that name already exists, the renaming
 will fail.  Also try the key binding A for appending something to a file name.
+.IP "rename_append [\-\fIflags\fR...]" 2
+.IX Item "rename_append [-flags...]"
+Opens the console with \*(L":rename <current file>\*(R" with the cursor positioned
+before the file extension.
+.Sp
+Flags:
+ \-a    Position before all extensions
+ \-r    Remove everything before extensions
 .IP "save_copy_buffer" 2
 .IX Item "save_copy_buffer"
 Save the copy buffer to \fI~/.config/ranger/copy_buffer\fR.  This can be used to
@@ -1170,25 +1241,22 @@ pass the list of copied files to another ranger instance.
 .IP "scout [\-\fIflags\fR...] [\-\-] \fIpattern\fR" 2
 .IX Item "scout [-flags...] [--] pattern"
 Swiss army knife command for searching, traveling and filtering files.
-The command takes various flags as arguments which can be used to
-influence its behaviour:
 .Sp
-.Vb 10
-\& \-a = automatically open a file on unambiguous match
-\& \-e = open the selected file when pressing enter
-\& \-f = filter files that match the current search pattern
-\& \-g = interpret pattern as a glob pattern
-\& \-i = ignore the letter case of the files
-\& \-k = keep the console open when changing a directory with the command
-\& \-l = letter skipping; e.g. allow "rdme" to match the file "readme"
-\& \-m = mark the matching files after pressing enter
-\& \-M = unmark the matching files after pressing enter
-\& \-p = permanent filter: hide non\-matching files after pressing enter
-\& \-r = interpret pattern as a regular expression pattern
-\& \-s = smart case; like \-i unless pattern contains upper case letters
-\& \-t = apply filter and search pattern as you type
-\& \-v = inverts the match
-.Ve
+Flags:
+ \-a    Automatically open a file on unambiguous match
+ \-e    Open the selected file when pressing enter
+ \-f    Filter files that match the current search pattern
+ \-g    Interpret pattern as a glob pattern
+ \-i    Ignore the letter case of the files
+ \-k    Keep the console open when changing a directory with the command
+ \-l    Letter skipping; e.g. allow \*(L"rdme\*(R" to match the file \*(L"readme\*(R"
+ \-m    Mark the matching files after pressing enter
+ \-M    Unmark the matching files after pressing enter
+ \-p    Permanent filter: hide non-matching files after pressing enter
+ \-r    Interpret pattern as a regular expression pattern
+ \-s    Smart case; like \-i unless pattern contains upper case letters
+ \-t    Apply filter and search pattern as you type
+ \-v    Inverts the match
 .Sp
 Multiple flags can be combined.  For example, \*(L":scout \-gpt\*(R" would create
 a :filter\-like command using globbing.
@@ -1241,6 +1309,9 @@ directory. If no path is given, uses the current directory.
 \&\fIpath\fR is a regular expression.  This means that \f(CW\*(C`path=~/dl\*(C'\fR applies to all
 paths that start with \fI~/dl\fR, e.g. \fI~/dl2\fR and \fI~/dl/foo\fR. To avoid this,
 use \f(CW\*(C`path=~/dl$\*(C'\fR.
+.Sp
+\&\fIpath\fR can be quoted with either single or double quotes to prevent unwanted
+splitting. \fIpath='~/dl dl$'\fR or \fIpath=\*(L"~/dl dl$\*(R"\fR
 .IP "shell [\-\fIflags\fR] \fIcommand\fR" 2
 .IX Item "shell [-flags] command"
 Run a shell command.  \fIflags\fR are discussed in their own section.
@@ -1292,18 +1363,15 @@ out the tag argument, all tagged files are unmarked.
 ranger reads several configuration files which are located in
 \&\fI\f(CI$HOME\fI/.config/ranger\fR or \fI\f(CI$XDG_CONFIG_HOME\fI/ranger\fR if \f(CW$XDG_CONFIG_HOME\fR is
 defined.  You can use the \-\-copy\-config option to obtain the default
-configuration files.  Each of the files contains further documentation.
+configuration files.  The files contain further documentation.
 .PP
-You don't need to copy the whole file though, most configuration files are
-overlaid on top of the defaults (\fIcommands.py\fR, \fIrc.conf\fR) or can be
-sub-classed (\fIcolorschemes\fR).
-.PP
-That being said, the user configuration files \fIrc.conf\fR and \fIcommands.py\fR are
-loaded only after ranger loads the default configuration files.  This may lead
-to some confusing situations, for example when a key is being bound despite the
-corresponding line being removed from the user's copy of the configuration
-file.  This behavior may be disabled with an environment variable (see also:
-\&\fB\s-1ENVIRONMENT\s0\fR).
+\&\fIrc.conf\fR, \fIcommands.py\fR and \fIcolorschemes\fR do not need to be copied fully
+as they will only be adding to the default configuration files except if explicitly
+overridden. This may lead to some confusing situations, for example when a key is
+being bound despite the corresponding line being removed from the user's copy of
+the configuration file. This behavior may be disabled with an environment
+variable (see also: \fB\s-1ENVIRONMENT\s0\fR). Note: All other configuration files only
+read from one source; i.e. default \s-1OR\s0 user, not both.
 .PP
 When starting ranger with the \fB\-\-clean\fR option, it will not access or create
 any of these files.
@@ -1433,7 +1501,7 @@ copy, run:
 \&\fIrifle\fR\|(1)
 .SH "BUGS"
 .IX Header "BUGS"
-Report bugs here: <https://github.com/hut/ranger/issues>
+Report bugs here: <https://github.com/ranger/ranger/issues>
 .PP
 Please include as much relevant information as possible.  For the most
 diagnostic output, run ranger like this: \f(CW\*(C`PYTHONOPTIMIZE= ranger \-\-debug\*(C'\fR

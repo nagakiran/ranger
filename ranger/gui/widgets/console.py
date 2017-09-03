@@ -3,7 +3,10 @@
 
 """The Console widget implements a vim-like console"""
 
+from __future__ import (absolute_import, division, print_function)
+
 import curses
+import os
 import re
 from collections import deque
 
@@ -14,7 +17,7 @@ from ranger.container.history import History, HistoryEmptyException
 import ranger
 
 
-class Console(Widget):
+class Console(Widget):  # pylint: disable=too-many-instance-attributes,too-many-public-methods
     visible = False
     last_cursor_mode = None
     history_search_pattern = None
@@ -32,20 +35,25 @@ class Console(Widget):
 
     def __init__(self, win):
         Widget.__init__(self, win)
-        self.clear()
+        self.pos = 0
+        self.line = ''
         self.history = History(self.settings.max_console_history_size)
         # load history from files
-        if not ranger.arg.clean:
-            self.historypath = self.fm.confpath('history')
-            try:
-                f = open(self.historypath, 'r')
-            except Exception:
-                pass
-            else:
-                for line in f:
-                    self.history.add(line[:-1])
-                f.close()
-        self.line = ""
+        if not ranger.args.clean:
+            self.historypath = self.fm.datapath('history')
+            if os.path.exists(self.historypath):
+                try:
+                    fobj = open(self.historypath, 'r')
+                except OSError as ex:
+                    self.fm.notify('Failed to read history file', bad=True, exception=ex)
+                else:
+                    try:
+                        for line in fobj:
+                            self.history.add(line[:-1])
+                    except UnicodeDecodeError as ex:
+                        self.fm.notify('Failed to parse corrupt history file',
+                                       bad=True, exception=ex)
+                    fobj.close()
         self.history_backup = History(self.history)
 
         # NOTE: the console is considered in the "question mode" when the
@@ -63,20 +71,20 @@ class Console(Widget):
 
     def destroy(self):
         # save history to files
-        if ranger.arg.clean or not self.settings.save_console_history:
+        if ranger.args.clean or not self.settings.save_console_history:
             return
         if self.historypath:
             try:
-                f = open(self.historypath, 'w')
-            except Exception:
-                pass
+                fobj = open(self.historypath, 'w')
+            except OSError as ex:
+                self.fm.notify('Failed to write history file', bad=True, exception=ex)
             else:
                 for entry in self.history_backup:
                     try:
-                        f.write(entry + '\n')
+                        fobj.write(entry + '\n')
                     except UnicodeEncodeError:
                         pass
-                f.close()
+                fobj.close()
         Widget.destroy(self)
 
     def draw(self):
@@ -84,7 +92,7 @@ class Console(Widget):
         if self.question_queue:
             assert isinstance(self.question_queue[0], tuple)
             assert len(self.question_queue[0]) == 3
-            self.addstr(0, 0, self.question_queue[0][0])
+            self.addstr(0, 0, self.question_queue[0][0][self.pos:])
             return
 
         self.addstr(0, 0, self.prompt)
@@ -100,13 +108,13 @@ class Console(Widget):
         if self.question_queue:
             try:
                 move(self.y, len(self.question_queue[0][0]))
-            except Exception:
+            except curses.error:
                 pass
         else:
             try:
                 pos = uwid(self.line[0:self.pos]) + len(self.prompt)
                 move(self.y, self.x + min(self.wid - 1, pos))
-            except Exception:
+            except curses.error:
                 pass
 
     def open(self, string='', prompt=None, position=None):
@@ -119,7 +127,7 @@ class Console(Widget):
         if self.last_cursor_mode is None:
             try:
                 self.last_cursor_mode = curses.curs_set(1)
-            except Exception:
+            except curses.error:
                 pass
         self.allow_close = False
         self.tab_deque = None
@@ -148,14 +156,11 @@ class Console(Widget):
         if trigger_cancel_function:
             cmd = self._get_cmd(quiet=True)
             if cmd:
-                try:
-                    cmd.cancel()
-                except Exception as error:
-                    self.fm.notify(error)
+                cmd.cancel()
         if self.last_cursor_mode is not None:
             try:
                 curses.curs_set(self.last_cursor_mode)
-            except Exception:
+            except curses.error:
                 pass
             self.last_cursor_mode = None
         self.fm.hide_console_info()
@@ -178,7 +183,7 @@ class Console(Widget):
         if not self.question_queue:
             return False
         question = self.question_queue[0]
-        text, callback, answers = question
+        _, callback, answers = question
         if answer in answers:
             self.question_queue.pop(0)
             callback(answer)
@@ -197,7 +202,7 @@ class Console(Widget):
             return
 
         if self.question_queue:
-            self.unicode_buffer, answer, self.pos = result
+            self.unicode_buffer, answer, _ = result
             self._answer_question(answer)
         else:
             self.unicode_buffer, self.line, self.pos = result
@@ -268,24 +273,30 @@ class Console(Widget):
         if direction.horizontal():
             # Ensure that the pointer is moved utf-char-wise
             if self.fm.py3:
-                self.pos = direction.move(
-                        direction=direction.right(),
-                        minimum=0,
-                        maximum=len(self.line) + 1,
-                        current=self.pos)
-            else:
-                if self.fm.py3:
-                    uc = list(self.line)
-                    upos = len(self.line[:self.pos])
+                if self.question_queue:
+                    umax = len(self.question_queue[0][0]) + 1 - self.wid
                 else:
-                    uc = list(self.line.decode('utf-8', 'ignore'))
+                    umax = len(self.line) + 1
+                self.pos = direction.move(
+                    direction=direction.right(),
+                    minimum=0,
+                    maximum=umax,
+                    current=self.pos)
+            else:
+                if self.question_queue:
+                    uchar = list(self.question_queue[0][0].decode('utf-8', 'ignore'))
+                    upos = len(self.question_queue[0][0][:self.pos].decode('utf-8', 'ignore'))
+                    umax = len(uchar) + 1 - self.wid
+                else:
+                    uchar = list(self.line.decode('utf-8', 'ignore'))
                     upos = len(self.line[:self.pos].decode('utf-8', 'ignore'))
+                    umax = len(uchar) + 1
                 newupos = direction.move(
-                        direction=direction.right(),
-                        minimum=0,
-                        maximum=len(uc) + 1,
-                        current=upos)
-                self.pos = len(''.join(uc[:newupos]).encode('utf-8', 'ignore'))
+                    direction=direction.right(),
+                    minimum=0,
+                    maximum=umax,
+                    current=upos)
+                self.pos = len(''.join(uchar[:newupos]).encode('utf-8', 'ignore'))
 
     def move_word(self, **keywords):
         direction = Direction(keywords)
@@ -304,7 +315,7 @@ class Console(Widget):
         ...     # it works fine in ranger, even with unicode input...
         ...     line = "ohai world,  this is dog"
         ... else:
-        ...     line = "\u30AA\u30CF\u30E8\u30A6 world,  this is dog"
+        ...     line = "\\u30AA\\u30CF\\u30E8\\u30A6 world,  this is dog"
         >>> Console.move_by_word(line, 0, -1)
         0
         >>> Console.move_by_word(line, 0, 1)
@@ -378,7 +389,8 @@ class Console(Widget):
             if backward:
                 right_part = self.line[self.pos:]
                 i = self.pos - 2
-                while i >= 0 and re.match(r'[\w\d]', self.line[i], re.U):
+                while i >= 0 and re.match(
+                        r'[\w\d]', self.line[i], re.UNICODE):  # pylint: disable=no-member
                     i -= 1
                 self.copy = self.line[i + 1:self.pos]
                 self.line = self.line[:i + 1] + right_part
@@ -386,7 +398,8 @@ class Console(Widget):
             else:
                 left_part = self.line[:self.pos]
                 i = self.pos + 1
-                while i < len(self.line) and re.match(r'[\w\d]', self.line[i], re.U):
+                while i < len(self.line) and re.match(
+                        r'[\w\d]', self.line[i], re.UNICODE):  # pylint: disable=no-member
                     i += 1
                 self.copy = self.line[self.pos:i]
                 if i >= len(self.line):
@@ -409,11 +422,11 @@ class Console(Widget):
             self.pos = len(left_part)
             self.line = left_part + self.line[self.pos + 1:]
         else:
-            uc = list(self.line.decode('utf-8', 'ignore'))
+            uchar = list(self.line.decode('utf-8', 'ignore'))
             upos = len(self.line[:self.pos].decode('utf-8', 'ignore')) + mod
-            left_part = ''.join(uc[:upos]).encode('utf-8', 'ignore')
+            left_part = ''.join(uchar[:upos]).encode('utf-8', 'ignore')
             self.pos = len(left_part)
-            self.line = left_part + ''.join(uc[upos + 1:]).encode('utf-8', 'ignore')
+            self.line = left_part + ''.join(uchar[upos + 1:]).encode('utf-8', 'ignore')
         self.on_line_change()
 
     def execute(self, cmd=None):
@@ -437,26 +450,24 @@ class Console(Widget):
 
     def _get_cmd(self, quiet=False):
         try:
-            command_class = self._get_cmd_class()
+            command_class = self.get_cmd_class()
+        except IndexError:
+            return None
         except KeyError:
             if not quiet:
-                error = "Command not found: `%s'" % self.line.split()[0]
-                self.fm.notify(error, bad=True)
-        except Exception:
+                self.fm.notify("Command not found: `%s'" % self.line.split()[0], bad=True)
             return None
-        else:
-            return command_class(self.line)
+        return command_class(self.line)
 
-    def _get_cmd_class(self):
-        return self.fm.commands.get_command(self.line.split()[0])
+    def get_cmd_class(self):
+        return self.fm.commands.get_command(self.line.split()[0], abbrev=True)
 
     def _get_tab(self, tabnum):
         if ' ' in self.line:
             cmd = self._get_cmd()
             if cmd:
                 return cmd.tab(tabnum)
-            else:
-                return None
+            return None
 
         return self.fm.commands.command_generator(self.line)
 
@@ -464,14 +475,12 @@ class Console(Widget):
         if self.tab_deque is None:
             tab_result = self._get_tab(tabnum)
 
-            if isinstance(tab_result, str):
+            if tab_result is None:
+                pass
+            elif isinstance(tab_result, str):
                 self.line = tab_result
                 self.pos = len(tab_result)
                 self.on_line_change()
-
-            elif tab_result is None:
-                pass
-
             elif hasattr(tab_result, '__iter__'):
                 self.tab_deque = deque(tab_result)
                 self.tab_deque.appendleft(self.line)
@@ -485,7 +494,7 @@ class Console(Widget):
     def on_line_change(self):
         self.history_search_pattern = self.line
         try:
-            cls = self._get_cmd_class()
+            cls = self.get_cmd_class()
         except (KeyError, ValueError, IndexError):
             pass
         else:
@@ -494,7 +503,7 @@ class Console(Widget):
                 cmd.quickly_executed = True
                 self.execute(cmd)
 
-    def ask(self, text, callback, choices=['y', 'n']):
+    def ask(self, text, callback, choices=None):
         """Open a question prompt with predefined choices
 
         The "text" is displayed as the question text and should include a list
@@ -507,7 +516,9 @@ class Console(Widget):
         The first choice is used when the user presses <Enter>, the second
         choice is used when the user presses <ESC>.
         """
-        self.question_queue.append((text, callback, choices))
+        self.question_queue.append(
+            (text, callback, choices if choices is not None else ['y', 'n']))
+
 
 if __name__ == '__main__':
     import doctest

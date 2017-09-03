@@ -8,18 +8,22 @@ print for the current file.  The right side shows directory information
 such as the space used by all the files in this directory.
 """
 
+from __future__ import (absolute_import, division, print_function)
+
+import curses
 import os
+from os import getuid, readlink
 from pwd import getpwuid
 from grp import getgrgid
-from os import getuid, readlink
 from time import time, strftime, localtime
 
 from ranger.ext.human_readable import human_readable
-from . import Widget
 from ranger.gui.bar import Bar
 
+from . import Widget
 
-class StatusBar(Widget):
+
+class StatusBar(Widget):  # pylint: disable=too-many-instance-attributes
     __doc__ = __doc__
     owners = {}
     groups = {}
@@ -37,7 +41,7 @@ class StatusBar(Widget):
         Widget.__init__(self, win)
         self.column = column
         self.settings.signal_bind('setopt.display_size_in_status_bar',
-                self.request_redraw, weak=True)
+                                  self.request_redraw, weak=True)
 
     def request_redraw(self):
         self.need_redraw = True
@@ -74,7 +78,7 @@ class StatusBar(Widget):
             self.fm.thisfile.load_if_outdated()
             try:
                 ctime = self.fm.thisfile.stat.st_ctime
-            except Exception:
+            except AttributeError:
                 ctime = -1
         else:
             ctime = -1
@@ -111,7 +115,7 @@ class StatusBar(Widget):
     def _draw_message(self):
         self.win.erase()
         self.color('in_statusbar', 'message',
-                self.msg.bad and 'bad' or 'good')
+                   self.msg.bad and 'bad' or 'good')
         self.addnstr(0, 0, self.msg.text, self.wid)
 
     def _draw_hint(self):
@@ -128,12 +132,12 @@ class StatusBar(Widget):
 
             try:
                 self.addnstr(0, starting_point, string, space_left)
-            except Exception:
+            except curses.error:
                 break
             space_left -= len(string)
             starting_point += len(string)
 
-    def _get_left_part(self, bar):
+    def _get_left_part(self, bar):  # pylint: disable=too-many-branches,too-many-statements
         left = bar.left
 
         if self.column is not None and self.column.target is not None\
@@ -147,7 +151,7 @@ class StatusBar(Widget):
                 return
         try:
             stat = target.stat
-        except Exception:
+        except AttributeError:
             return
         if stat is None:
             return
@@ -156,7 +160,7 @@ class StatusBar(Widget):
             perms = '--%s--' % self.fm.mode.upper()
         else:
             perms = target.get_permission_string()
-        how = getuid() == stat.st_uid and 'good' or 'bad'
+        how = 'good' if getuid() == stat.st_uid else 'bad'
         left.add(perms, 'permissions', how)
         left.add_space()
         left.add(str(stat.st_nlink), 'nlink')
@@ -166,10 +170,10 @@ class StatusBar(Widget):
         left.add(self._get_group(target), 'group')
 
         if target.is_link:
-            how = target.exists and 'good' or 'bad'
+            how = 'good' if target.exists else 'bad'
             try:
                 dest = readlink(target.path)
-            except Exception:
+            except OSError:
                 dest = '?'
             left.add(' -> ' + dest, 'link', how)
         else:
@@ -230,7 +234,7 @@ class StatusBar(Widget):
             except KeyError:
                 return str(gid)
 
-    def _get_right_part(self, bar):
+    def _get_right_part(self, bar):  # pylint: disable=too-many-branches,too-many-statements
         right = bar.right
         if self.column is None:
             return
@@ -252,6 +256,10 @@ class StatusBar(Widget):
             right.add(str(self.fm.thisdir.flat), base, 'flat')
             right.add(", ", "space")
 
+        if self.fm.thisdir.narrow_filter:
+            right.add("narrowed")
+            right.add(", ", "space")
+
         if self.fm.thisdir.filter:
             right.add("f=`", base, 'filter')
             right.add(self.fm.thisdir.filter.pattern, base, 'filter')
@@ -261,8 +269,8 @@ class StatusBar(Widget):
             if len(target.marked_items) == target.size:
                 right.add(human_readable(target.disk_usage, separator=''))
             else:
-                sumsize = sum(f.size for f in target.marked_items if not
-                        f.is_directory or f._cumulative_size_calculated)
+                sumsize = sum(f.size for f in target.marked_items
+                              if not f.is_directory or f.cumulative_size_calculated)
                 right.add(human_readable(sumsize, separator=''))
             right.add("/" + str(len(target.marked_items)))
         else:
@@ -280,9 +288,8 @@ class StatusBar(Widget):
             # Indicate that there are marked files. Useful if you scroll
             # away and don't see them anymore.
             right.add('Mrk', base, 'marked')
-        elif len(target.files):
-            right.add(str(target.pointer + 1) + '/'
-                    + str(len(target.files)) + '  ', base)
+        elif target.files:
+            right.add(str(target.pointer + 1) + '/' + str(len(target.files)) + '  ', base)
             if max_pos <= 0:
                 right.add('All', base, 'all')
             elif pos == 0:
@@ -290,10 +297,15 @@ class StatusBar(Widget):
             elif pos >= max_pos:
                 right.add('Bot', base, 'bot')
             else:
-                right.add('{0:0.0%}'.format(float(pos) / max_pos),
-                        base, 'percentage')
+                right.add('{0:0.0%}'.format((pos / max_pos)),
+                          base, 'percentage')
         else:
             right.add('0/0  All', base, 'all')
+
+        if self.settings.freeze_files:
+            # Indicate that files are frozen and will not be loaded
+            right.add("  ", "space")
+            right.add('FROZEN', base, 'frozen')
 
     def _print_result(self, result):
         self.win.move(0, 0)
@@ -309,7 +321,7 @@ class StatusBar(Widget):
                     states.append(item.percent)
             if states:
                 state = sum(states) / len(states)
-                barwidth = state / 100.0 * self.wid
+                barwidth = (state / 100) * self.wid
                 self.color_at(0, 0, int(barwidth), ("in_statusbar", "loaded"))
                 self.color_reset()
 
@@ -319,7 +331,7 @@ def get_free_space(path):
     return stat.f_bavail * stat.f_frsize
 
 
-class Message(object):
+class Message(object):  # pylint: disable=too-few-public-methods
     elapse = None
     text = None
     bad = False

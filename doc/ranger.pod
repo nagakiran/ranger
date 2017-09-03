@@ -8,9 +8,11 @@ ranger - visual file manager
 =head1 SYNOPSIS
 
 B<ranger> [B<--version>] [B<--help>] [B<--debug>] [B<--clean>]
-[B<--confdir>=I<directory>] [B<--copy-config>=I<which>]
+[B<--cachedir>=I<directory>] [B<--confdir>=I<directory>] [B<--datadir>=I<directory>]
+[B<--copy-config>=I<which>]
 [B<--choosefile>=I<target>] [B<--choosefiles>=I<target>]
 [B<--choosedir>=I<target>] [B<--selectfile>=I<filepath>]
+[B<--show-only-dirs>]
 [B<--list-unused-keys>] [B<--list-tagged-files>=I<tag>]
 [B<--profile>] [B<--cmd>=I<command>] [I<path>]
 
@@ -67,9 +69,17 @@ Activate the clean mode:  ranger will not access or create any configuration
 files nor will it leave any traces on your system.  This is useful when your
 configuration is broken, when you want to avoid clutter, etc.
 
+=item B<--cachedir>=I<dir>
+
+Change the cache directory of ranger from $XDG_CACHE_HOME or ~/.cache/ranger to "dir".
+
 =item B<-r> I<dir>, B<--confdir>=I<dir>
 
-Change the configuration directory of ranger from ~/.config/ranger to "dir".
+Change the configuration directory of ranger from $XDG_CONFIG_HOME or ~/.config/ranger to "dir".
+
+=item B<--datadir>=I<dir>
+
+Change the data directory of ranger from $XDG_DATA_HOME or ~/.local/share/ranger to "dir".
 
 =item B<--copy-config>=I<file>
 
@@ -108,6 +118,11 @@ write the last visited directory into I<targetfile>.
 =item B<--selectfile>=I<targetfile>
 
 Open ranger with I<targetfile> selected.
+
+=item B<--show-only-dirs>
+
+Display only the directories. May be used in conjunction with
+B<--choosedir>=I<targetfile>.
 
 =item B<--list-unused-keys>
 
@@ -246,6 +261,8 @@ can use it for something like this command:
 
 %confdir expands to the directory given by B<--confdir>.
 
+%datadir expands to the directory given by B<--datadir>.
+
 The macro %space expands to a space character. You can use it to add spaces to
 the end of a command when needed, while preventing editors to strip spaces off
 the end of the line automatically.
@@ -383,6 +400,14 @@ Move up and down in the parent directory.
 =item ^R
 
 Reload everything
+
+=item F
+
+Toggle I<freeze_files> setting.  When active (indicated by a cyan I<FROZEN>
+message in the status bar), directories and files will not be loaded, improving
+performance when all the files you need are already loaded.  This does not
+affect file previews, which can be toggled with I<zI>.  Also try disabling the
+preview of directories with I<zP>.
 
 =item ^L
 
@@ -671,6 +696,22 @@ though by turning on this option.
 Specify whether bookmarks should be included in the tab completion of the "cd"
 command.
 
+=item cd_tab_case [string]
+
+Changes case sensitivity for the "cd" command tab completion. Possible values are:
+
+ sensitive
+ insensitive
+ smart
+
+=item cd_tab_smart [bool]
+
+Use smart tab completion with less typing? E.g. ":cd /f/b/b<tab>" yields ":cd /foo/bar/baz".
+
+=item clear_filters_on_dir_change [bool]
+
+If set to 'true', persistent filters would be cleared upon leaving the directory
+
 =item collapse_preview [bool] <zc>
 
 When no preview is visible, should the last column be squeezed to make use of
@@ -724,6 +765,12 @@ currently running tasks which support progress bars?
 Flush the input after each key hit?  One advantage is that when scrolling down
 with "j", ranger stops scrolling instantly when you release the key.  One
 disadvantage is that when you type commands blindly, some keys might get lost.
+
+=item freeze_files [bool] <F>
+
+When active, directories and files will not be loaded, improving performance
+when all the files you need are already loaded.  This does not affect file
+previews.
 
 =item hidden_filter [string]
 
@@ -799,6 +846,12 @@ the content.
 Should the console history be saved on exit?  If disabled, the console history
 is reset when you restart ranger.
 
+=item save_tabs_on_exit [bool]
+
+Save all tabs, except the active, on exit? The last saved tabs are restored once
+when starting the next session. Multiple sessions are stored in a stack and the
+oldest saved tabs are restored first.
+
 =item scroll_offset [integer]
 
 Try to keep this much space between the top/bottom border when scrolling.
@@ -850,9 +903,13 @@ combination, e.g. "oN" to sort from Z to A.
 
 Put the status bar at the top of the window?
 
+=item hostname_in_titlebar [bool]
+
+Show hostname in titlebar?
+
 =item tilde_in_titlebar [bool]
 
-Abbreviate $HOME with ~ in the title bar (first line) of ranger?
+Abbreviate $HOME with ~ in the titlebar (first line) of ranger?
 
 =item unicode_ellipsis [bool]
 
@@ -882,14 +939,15 @@ Sets the state for the version control backend. The possible values are:
  local      display only local state.
  enabled    display both, local and remote state. May be slow for hg and bzr.
 
+=item wrap_scroll [bool]
+
+Enable scroll wrapping - moving down while on the last item will wrap around to
+the top and vice versa.
+
 =item xterm_alt_key [bool]
 
 Enable this if key combinations with the Alt Key don't work for you.
 (Especially on xterm)
-
-=item clear_filters_on_dir_change [bool]
-
-If set to 'true', persistent filters would be cleared upon leaving the directory
 
 =back
 
@@ -924,6 +982,7 @@ ranger.  For your convenience, this is a list of the "public" commands including
  flat level
  grep pattern
  help
+ jump_non [-FLAGS...]
  linemode linemodename
  load_copy_buffer
  map key command
@@ -937,17 +996,19 @@ ranger.  For your convenience, this is a list of the "public" commands including
  punmap keys...
  quit
  quit!
+ quitall
+ quitall!
  relink newpath
- rename_append
+ rename_append [-FLAGS...]
  rename newname
  save_copy_buffer
- scout [-FLAGS] pattern
+ scout [-FLAGS...] pattern
  search pattern
  search_inc pattern
  set option value
  setintag tags option value
  setlocal [path=<path>] option value
- shell [-FLAGS] command
+ shell [-FLAGS...] command
  source filename
  terminal
  tmap key command
@@ -1114,6 +1175,14 @@ Looks for a string in all marked files or directories.
 
 Provides a quick way to view ranger documentations.
 
+=item jump_non [-I<flags>...]
+
+Jumps to first non-directory if highlighted file is a directory and vice versa.
+
+Flags:
+ -r    Jump in reverse order
+ -w    Wrap around if reaching end of filelist
+
 =item linemode I<linemodename>
 
 Sets the linemode of all files in the current directory.  The linemode may be:
@@ -1195,27 +1264,40 @@ Removes key mappings of the pager. Works like the C<unmap> command.
 
 =item quit
 
-Like quit!, but closes only this tab if multiple tabs are open.
+Closes the current tab, if there's only one tab. Otherwise quits if there are no tasks in progress.
+The current directory will be bookmarked as ' so you can re-enter it by typing `` or '' the next time you
+start ranger.
 
 =item quit!
 
-Quit ranger.  The current directory will be bookmarked as ' so you can re-enter
-it by typing `` or '' the next time you start ranger.
+Like C<quit>, except will force quit even if tasks are in progress.
+
+=item quitall
+
+Like C<quit>, except will quit even if multiple tabs are open.
+
+=item quitall!
+
+Like C<quitall>, except will force quit even if tasks are in progress.
 
 =item relink I<newpath>
 
 Change the link destination of the current symlink file to <newpath>. First
 <tab> will load the original link.
 
-=item rename_append
-
-Opens the console with ":rename <current file>" with the cursor automatically
-placed before the file extension
-
 =item rename I<newname>
 
 Rename the current file.  If a file with that name already exists, the renaming
 will fail.  Also try the key binding A for appending something to a file name.
+
+=item rename_append [-I<flags>...]
+
+Opens the console with ":rename <current file>" with the cursor positioned
+before the file extension.
+
+Flags:
+ -a    Position before all extensions
+ -r    Remove everything before extensions
 
 =item save_copy_buffer
 
@@ -1225,23 +1307,22 @@ pass the list of copied files to another ranger instance.
 =item scout [-I<flags>...] [--] I<pattern>
 
 Swiss army knife command for searching, traveling and filtering files.
-The command takes various flags as arguments which can be used to
-influence its behaviour:
 
- -a = automatically open a file on unambiguous match
- -e = open the selected file when pressing enter
- -f = filter files that match the current search pattern
- -g = interpret pattern as a glob pattern
- -i = ignore the letter case of the files
- -k = keep the console open when changing a directory with the command
- -l = letter skipping; e.g. allow "rdme" to match the file "readme"
- -m = mark the matching files after pressing enter
- -M = unmark the matching files after pressing enter
- -p = permanent filter: hide non-matching files after pressing enter
- -r = interpret pattern as a regular expression pattern
- -s = smart case; like -i unless pattern contains upper case letters
- -t = apply filter and search pattern as you type
- -v = inverts the match
+Flags:
+ -a    Automatically open a file on unambiguous match
+ -e    Open the selected file when pressing enter
+ -f    Filter files that match the current search pattern
+ -g    Interpret pattern as a glob pattern
+ -i    Ignore the letter case of the files
+ -k    Keep the console open when changing a directory with the command
+ -l    Letter skipping; e.g. allow "rdme" to match the file "readme"
+ -m    Mark the matching files after pressing enter
+ -M    Unmark the matching files after pressing enter
+ -p    Permanent filter: hide non-matching files after pressing enter
+ -r    Interpret pattern as a regular expression pattern
+ -s    Smart case; like -i unless pattern contains upper case letters
+ -t    Apply filter and search pattern as you type
+ -v    Inverts the match
 
 Multiple flags can be combined.  For example, ":scout -gpt" would create
 a :filter-like command using globbing.
@@ -1295,6 +1376,9 @@ directory. If no path is given, uses the current directory.
 I<path> is a regular expression.  This means that C<path=~/dl> applies to all
 paths that start with I<~/dl>, e.g. I<~/dl2> and I<~/dl/foo>. To avoid this,
 use C<path=~/dl$>.
+
+I<path> can be quoted with either single or double quotes to prevent unwanted
+splitting. I<path='~/dl dl$'> or I<path="~/dl dl$">
 
 =item shell [-I<flags>] I<command>
 
@@ -1360,18 +1444,15 @@ out the tag argument, all tagged files are unmarked.
 ranger reads several configuration files which are located in
 F<$HOME/.config/ranger> or F<$XDG_CONFIG_HOME/ranger> if $XDG_CONFIG_HOME is
 defined.  You can use the --copy-config option to obtain the default
-configuration files.  Each of the files contains further documentation.
+configuration files.  The files contain further documentation.
 
-You don't need to copy the whole file though, most configuration files are
-overlaid on top of the defaults (F<commands.py>, F<rc.conf>) or can be
-sub-classed (F<colorschemes>).
-
-That being said, the user configuration files F<rc.conf> and F<commands.py> are
-loaded only after ranger loads the default configuration files.  This may lead
-to some confusing situations, for example when a key is being bound despite the
-corresponding line being removed from the user's copy of the configuration
-file.  This behavior may be disabled with an environment variable (see also:
-B<ENVIRONMENT>).
+F<rc.conf>, F<commands.py> and F<colorschemes> do not need to be copied fully
+as they will only be adding to the default configuration files except if explicitly
+overridden. This may lead to some confusing situations, for example when a key is
+being bound despite the corresponding line being removed from the user's copy of
+the configuration file. This behavior may be disabled with an environment
+variable (see also: B<ENVIRONMENT>). Note: All other configuration files only
+read from one source; i.e. default OR user, not both.
 
 When starting ranger with the B<--clean> option, it will not access or create
 any of these files.
@@ -1556,7 +1637,7 @@ rifle(1)
 
 =head1 BUGS
 
-Report bugs here: L<https://github.com/hut/ranger/issues>
+Report bugs here: L<https://github.com/ranger/ranger/issues>
 
 Please include as much relevant information as possible.  For the most
 diagnostic output, run ranger like this: C<PYTHONOPTIMIZE= ranger --debug>

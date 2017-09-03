@@ -13,6 +13,8 @@ attr ^= reverse
 bool(attr & reverse) # => False
 """
 
+from __future__ import (absolute_import, division, print_function)
+
 import curses
 
 DEFAULT_FOREGROUND = curses.COLOR_WHITE
@@ -28,7 +30,7 @@ def get_color(fg, bg):
         size = len(COLOR_PAIRS)
         try:
             curses.init_pair(size, fg, bg)
-        except Exception:
+        except curses.error:
             # If curses.use_default_colors() failed during the initialization
             # of curses, then using -1 as fg or bg will fail as well, which
             # we need to handle with fallback-defaults:
@@ -39,22 +41,24 @@ def get_color(fg, bg):
 
             try:
                 curses.init_pair(size, fg, bg)
-            except Exception:
+            except curses.error:
                 # If this fails too, colors are probably not supported
                 pass
         COLOR_PAIRS[key] = size
 
     return COLOR_PAIRS[key]
 
-black   = curses.COLOR_BLACK
-blue    = curses.COLOR_BLUE
-cyan    = curses.COLOR_CYAN
-green   = curses.COLOR_GREEN
-magenta = curses.COLOR_MAGENTA
-red     = curses.COLOR_RED
-white   = curses.COLOR_WHITE
-yellow  = curses.COLOR_YELLOW
-default = -1
+
+# pylint: disable=invalid-name,bad-whitespace
+black      = curses.COLOR_BLACK
+blue       = curses.COLOR_BLUE
+cyan       = curses.COLOR_CYAN
+green      = curses.COLOR_GREEN
+magenta    = curses.COLOR_MAGENTA
+red        = curses.COLOR_RED
+white      = curses.COLOR_WHITE
+yellow     = curses.COLOR_YELLOW
+default    = -1
 
 normal     = curses.A_NORMAL
 bold       = curses.A_BOLD
@@ -64,3 +68,4 @@ underline  = curses.A_UNDERLINE
 invisible  = curses.A_INVIS
 
 default_colors = (default, default, normal)
+# pylint: enable=invalid-name,bad-whitespace

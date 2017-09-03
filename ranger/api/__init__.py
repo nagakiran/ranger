@@ -3,10 +3,17 @@
 
 """Files in this module contain helper functions used in configuration files."""
 
+from __future__ import (absolute_import, division, print_function)
+
+import ranger
+from ranger.core.linemode import LinemodeBase
+
+
+__all__ = ['ranger', 'LinemodeBase', 'hook_init', 'hook_ready', 'register_linemode']
+
+
 # Hooks for use in plugins:
-
-
-def hook_init(fm):
+def hook_init(fm):  # pylint: disable=unused-argument
     """A hook that is called when ranger starts up.
 
     Parameters:
@@ -20,7 +27,7 @@ def hook_init(fm):
     """
 
 
-def hook_ready(fm):
+def hook_ready(fm):  # pylint: disable=unused-argument
     """A hook that is called after the ranger UI is initialized.
 
     Parameters:
@@ -31,8 +38,6 @@ def hook_ready(fm):
     This hook is executed after the user interface is initialized.  You should
     NOT print anything to stdout anymore from here on.  Use fm.notify instead.
     """
-
-from ranger.core.linemode import LinemodeBase
 
 
 def register_linemode(linemode_class):

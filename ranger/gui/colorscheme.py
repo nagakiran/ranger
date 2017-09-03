@@ -24,6 +24,8 @@ Define which colorscheme in your settings (e.g. ~/.config/ranger/rc.conf):
 set colorscheme yourschemename
 """
 
+from __future__ import (absolute_import, division, print_function)
+
 import os.path
 from curses import color_pair
 
@@ -33,6 +35,10 @@ from ranger.gui.context import Context
 from ranger.core.main import allow_access_to_confdir
 from ranger.ext.cached_function import cached_function
 from ranger.ext.iter_tools import flatten
+
+
+class ColorSchemeError(Exception):
+    pass
 
 
 class ColorScheme(object):
@@ -51,10 +57,9 @@ class ColorScheme(object):
         """
         context = Context(keys)
         color = self.use(context)
-        if len(color) != 3 or not all(isinstance(value, int)
-                for value in color):
+        if len(color) != 3 or not all(isinstance(value, int) for value in color):
             raise ValueError("Bad Value from colorscheme.  Need "
-                "a tuple of (foreground_color, background_color, attribute).")
+                             "a tuple of (foreground_color, background_color, attribute).")
         return color
 
     @cached_function
@@ -66,7 +71,8 @@ class ColorScheme(object):
         fg, bg, attr = self.get(*flatten(keys))
         return attr | color_pair(get_color(fg, bg))
 
-    def use(self, context):
+    @staticmethod
+    def use(_):
         """Use the colorscheme to determine the (fg, bg, attr) tuple.
 
         Override this method in your own colorscheme.
@@ -74,7 +80,7 @@ class ColorScheme(object):
         return (-1, -1, 0)
 
 
-def _colorscheme_name_to_class(signal):
+def _colorscheme_name_to_class(signal):  # pylint: disable=too-many-branches
     # Find the colorscheme.  First look in ~/.config/ranger/colorschemes,
     # then at RANGERDIR/colorschemes.  If the file contains a class
     # named Scheme, it is used.  Otherwise, an arbitrary other class
@@ -86,15 +92,15 @@ def _colorscheme_name_to_class(signal):
         signal.value = 'default'
 
     scheme_name = signal.value
-    usecustom = not ranger.arg.clean
+    usecustom = not ranger.args.clean
 
     def exists(colorscheme):
         return os.path.exists(colorscheme + '.py') or os.path.exists(colorscheme + '.pyc')
 
-    def is_scheme(x):
+    def is_scheme(cls):
         try:
-            return issubclass(x, ColorScheme)
-        except Exception:
+            return issubclass(cls, ColorScheme)
+        except TypeError:
             return False
 
     # create ~/.config/ranger/colorschemes/__init__.py if it doesn't exist
@@ -118,16 +124,15 @@ def _colorscheme_name_to_class(signal):
             signal.value = signal.previous
         else:
             signal.value = ColorScheme()
-        raise Exception("Cannot locate colorscheme `%s'" % scheme_name)
+        raise ColorSchemeError("Cannot locate colorscheme `%s'" % scheme_name)
     else:
         if usecustom:
-            allow_access_to_confdir(ranger.arg.confdir, True)
-        scheme_module = getattr(__import__(scheme_supermodule,
-                globals(), locals(), [scheme_name], 0), scheme_name)
+            allow_access_to_confdir(ranger.args.confdir, True)
+        scheme_module = getattr(
+            __import__(scheme_supermodule, globals(), locals(), [scheme_name], 0), scheme_name)
         if usecustom:
-            allow_access_to_confdir(ranger.arg.confdir, False)
-        if hasattr(scheme_module, 'Scheme') \
-                and is_scheme(scheme_module.Scheme):
+            allow_access_to_confdir(ranger.args.confdir, False)
+        if hasattr(scheme_module, 'Scheme') and is_scheme(scheme_module.Scheme):
             signal.value = scheme_module.Scheme()
         else:
             for var in scheme_module.__dict__.values():
@@ -135,19 +140,19 @@ def _colorscheme_name_to_class(signal):
                     signal.value = var()
                     break
             else:
-                raise Exception("The module contains no valid colorscheme!")
+                raise ColorSchemeError("The module contains no valid colorscheme!")
 
 
-def get_all_colorschemes():
+def get_all_colorschemes(fm):
     colorschemes = set()
     # Load colorscheme names from main ranger/colorschemes dir
-    for item in os.listdir(ranger.RANGERDIR + '/colorschemes'):
+    for item in os.listdir(os.path.join(ranger.RANGERDIR, 'colorschemes')):
         if not item.startswith('__'):
             colorschemes.add(item.rsplit('.', 1)[0])
     # Load colorscheme names from ~/.config/ranger/colorschemes if dir exists
-    if os.path.isdir(os.path.expanduser(ranger.CONFDIR + '/colorschemes')):
-        for item in os.listdir(os.path.expanduser(
-                ranger.CONFDIR + '/colorschemes')):
+    confpath = fm.confpath('colorschemes')
+    if os.path.isdir(confpath):
+        for item in os.listdir(confpath):
             if not item.startswith('__'):
                 colorschemes.add(item.rsplit('.', 1)[0])
     return list(sorted(colorschemes))

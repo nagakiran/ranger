@@ -1,9 +1,10 @@
 # This file is part of ranger, the console file manager.
 # License: GNU GPL version 3, see the file "AUTHORS" for details.
 
-import curses
-import _curses
+from __future__ import (absolute_import, division, print_function)
+
 import sys
+import curses
 
 from ranger.gui.color import get_color
 from ranger.core.shared import SettingsAware
@@ -26,18 +27,21 @@ class CursesShortcuts(SettingsAware):
     addstr(*args) -- failsafe version of self.win.addstr(*args)
     """
 
+    def __init__(self):
+        self.win = None
+
     def addstr(self, *args):
         y, x = self.win.getyx()
 
         try:
             self.win.addstr(*args)
-        except Exception:
+        except (curses.error, TypeError):
             if len(args) > 1:
                 self.win.move(y, x)
 
                 try:
                     self.win.addstr(*_fix_surrogates(args))
-                except Exception:
+                except (curses.error, UnicodeError):
                     pass
 
     def addnstr(self, *args):
@@ -45,13 +49,13 @@ class CursesShortcuts(SettingsAware):
 
         try:
             self.win.addnstr(*args)
-        except Exception:
+        except (curses.error, TypeError):
             if len(args) > 2:
                 self.win.move(y, x)
 
                 try:
                     self.win.addnstr(*_fix_surrogates(args))
-                except Exception:
+                except (curses.error, UnicodeError):
                     pass
 
     def addch(self, *args):
@@ -59,7 +63,7 @@ class CursesShortcuts(SettingsAware):
             args = [args[1], args[0]] + list(args[2:])
         try:
             self.win.addch(*args)
-        except Exception:
+        except (curses.error, TypeError):
             pass
 
     def color(self, *keys):
@@ -67,7 +71,7 @@ class CursesShortcuts(SettingsAware):
         attr = self.settings.colorscheme.get_attr(*keys)
         try:
             self.win.attrset(attr)
-        except _curses.error:
+        except curses.error:
             pass
 
     def color_at(self, y, x, wid, *keys):
@@ -75,13 +79,13 @@ class CursesShortcuts(SettingsAware):
         attr = self.settings.colorscheme.get_attr(*keys)
         try:
             self.win.chgat(y, x, wid, attr)
-        except _curses.error:
+        except curses.error:
             pass
 
     def set_fg_bg_attr(self, fg, bg, attr):
         try:
             self.win.attrset(curses.color_pair(get_color(fg, bg)) | attr)
-        except _curses.error:
+        except curses.error:
             pass
 
     def color_reset(self):

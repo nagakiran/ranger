@@ -1,11 +1,16 @@
 # This file is part of ranger, the console file manager.
 # License: GNU GPL version 3, see the file "AUTHORS" for details.
 
+from __future__ import (absolute_import, division, print_function)
+
+import curses
+
 from ranger.core.shared import FileManagerAware
 from ranger.gui.curses_shortcuts import CursesShortcuts
 
 
-class Displayable(FileManagerAware, CursesShortcuts):
+class Displayable(  # pylint: disable=too-many-instance-attributes
+        FileManagerAware, CursesShortcuts):
     """Displayables are objects which are displayed on the screen.
 
     This is just the abstract class, defining basic operations
@@ -40,8 +45,10 @@ class Displayable(FileManagerAware, CursesShortcuts):
         settings, fm -- inherited shared variables
     """
 
-    def __init__(self, win, env=None, fm=None, settings=None):
+    def __init__(self, win,  # pylint: disable=super-init-not-called
+                 env=None, fm=None, settings=None):
         from ranger.gui.ui import UI
+
         if env is not None:
             self.env = env
         if fm is not None:
@@ -96,8 +103,7 @@ class Displayable(FileManagerAware, CursesShortcuts):
 
     def destroy(self):
         """Called when the object is destroyed."""
-        if hasattr(self, 'win'):
-            del self.win
+        self.win = None
 
     def contains_point(self, y, x):
         """Test whether the point lies inside this object.
@@ -105,7 +111,7 @@ class Displayable(FileManagerAware, CursesShortcuts):
         x and y should be absolute coordinates.
         """
         return (x >= self.x and x < self.x + self.wid) and \
-                (y >= self.y and y < self.y + self.hei)
+            (y >= self.y and y < self.y + self.hei)
 
     def click(self, event):
         """Called when a mouse key is pressed and self.focused is True.
@@ -153,31 +159,33 @@ class Displayable(FileManagerAware, CursesShortcuts):
 
             if x < 0 or y < 0:
                 self.fm.notify("Warning: Subwindow origin below zero for <%s> "
-                    "(x = %d, y = %d)" % (self, x, y), bad=True)
+                               "(x = %d, y = %d)" % (self, x, y), bad=True)
 
             if x + wid > maxx or y + hei > maxy:
-                self.fm.notify("Warning: Subwindow size out of bounds for <%s> "
-                    "(x = %d, y = %d, hei = %d, wid = %d)" % (self,
-                    x, y, hei, wid), bad=True)
+                self.fm.notify(
+                    "Warning: Subwindow size out of bounds for <%s> "
+                    "(x = %d, y = %d, hei = %d, wid = %d)" % (self, x, y, hei, wid),
+                    bad=True,
+                )
 
         window_is_cleared = False
 
         if hei != self.hei or wid != self.wid:
-            #log("resizing " + str(self))
+            # log("resizing " + str(self))
             self.win.erase()
             self.need_redraw = True
             window_is_cleared = True
             try:
                 self.win.resize(hei, wid)
-            except Exception:
+            except curses.error:
                 # Not enough space for resizing...
                 try:
                     self.win.mvderwin(0, 0)
                     do_move = True
                     self.win.resize(hei, wid)
-                except Exception:
+                except curses.error:
                     pass
-                    #raise ValueError("Resizing Failed!")
+                    # raise ValueError("Resizing Failed!")
 
             self.hei, self.wid = self.win.getmaxyx()
 
@@ -185,10 +193,10 @@ class Displayable(FileManagerAware, CursesShortcuts):
             if not window_is_cleared:
                 self.win.erase()
                 self.need_redraw = True
-            #log("moving " + str(self))
+            # log("moving " + str(self))
             try:
                 self.win.mvderwin(y, x)
-            except Exception:
+            except curses.error:
                 pass
 
             self.paryx = self.win.getparyx()
@@ -257,7 +265,7 @@ class DisplayableContainer(Displayable):
 
     def press(self, key):
         """Recursively called on objects in container"""
-        focused_obj = self._get_focused_obj()
+        focused_obj = self.get_focused_obj()
 
         if focused_obj:
             focused_obj.press(key)
@@ -266,7 +274,7 @@ class DisplayableContainer(Displayable):
 
     def click(self, event):
         """Recursively called on objects in container"""
-        focused_obj = self._get_focused_obj()
+        focused_obj = self.get_focused_obj()
         if focused_obj and focused_obj.click(event):
             return True
 
@@ -305,13 +313,13 @@ class DisplayableContainer(Displayable):
         else:
             obj.parent = None
 
-    def _get_focused_obj(self):
+    def get_focused_obj(self):
         # Finds a focused displayable object in the container.
         for displayable in self.container:
             if displayable.focused:
                 return displayable
             try:
-                obj = displayable._get_focused_obj()
+                obj = displayable.get_focused_obj()
             except AttributeError:
                 pass
             else:
