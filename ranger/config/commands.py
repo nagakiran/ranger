@@ -96,7 +96,7 @@ import os
 import re
 from io import open
 
-# from ranger import PY3
+from ranger import PY3
 from ranger.api.commands import Command
 
 
@@ -2347,3 +2347,13 @@ class ag(Command):
         if flg[0] == '-' and flg[1] in 'flvgprw':
             cmd += ' ' + flg
         return ['{} {}'.format(cmd, p) for p in reversed(ag.patterns)]
+
+class show_files_in_finder(Command):
+    """
+    :show_files_in_finder
+
+    Present selected files in finder
+    """
+
+    def execute(self):
+        self.fm.run('open .', flags='f')
