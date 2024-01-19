@@ -132,7 +132,8 @@ handle_extension() {
             ;; # Continue with next handler on failure
 
         csv)
-            table "${FILE_PATH}" && exit 5
+            # table "${FILE_PATH}" && exit 5
+						mlr --icsv --opprint cat "${FILE_PATH}" && exit 5
             ;; # Continue with next handler on failure
     esac
 }
