@@ -50,6 +50,14 @@ OPENSCAD_COLORSCHEME="${RNGR_OPENSCAD_COLORSCHEME:-Tomorrow Night}"
 SQLITE_TABLE_LIMIT=20  # Display only the top <limit> tables in database, set to 0 for no exhaustive preview (only the sqlite_master table is displayed).
 SQLITE_ROW_LIMIT=5     # Display only the first and the last (<limit> - 1) records in each table, set to 0 for no limits.
 
+# Use the json previewer if we identify the file content as JSON though doesn't have standard .json extension (like .prettierrc)
+handle_custom_preview() {
+	case "$(file -b "${FILE_PATH}")" in
+			*"JSON data"*)
+					jq --color-output '.' "${FILE_PATH}" && exit 5
+					;;
+	esac
+}
 handle_extension() {
     case "${FILE_EXTENSION_LOWER}" in
         ## Archive
@@ -478,6 +486,7 @@ MIMETYPE="$( file --dereference --brief --mime-type -- "${FILE_PATH}" )"
 if [[ "${PV_IMAGE_ENABLED}" == 'True' ]]; then
     handle_image "${MIMETYPE}"
 fi
+handle_custom_preview
 handle_extension
 handle_mime "${MIMETYPE}"
 handle_fallback
